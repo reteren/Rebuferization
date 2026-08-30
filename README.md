@@ -2,9 +2,26 @@
 
 > A fast, persistent clipboard history for Windows. Everything you copy stays for 30 days — text, images, GIFs, videos, files — and comes back with one hotkey.
 
-Rebuffer is a replacement for the built-in Windows `Win+V` clipboard history, with a dark liquid-glass interface, 30-day persistence across reboots, search, sorting, filters, pinning, and a manual "shelf" where you can park files you use often.
+![The popup grid showing text, code, link, colour, image and file cards](docs/img/popup.png)
 
-*(Name is a placeholder — rename freely. It follows the `Re-` pattern of Renarrator / Rerounder.)*
+Rebuffer is a replacement for the built-in Windows `Win+V` clipboard history: a dark liquid-glass interface, 30-day persistence across reboots, search, sorting, filters, pinning, and a manual "shelf" where you can park files you use often.
+
+---
+
+## Status
+
+**Shipped:** clipboard capture (text, rich text, images, video, files), duplicate bumping, privacy-flag filtering and a per-app blocklist, the `Alt+V` popup, the virtualized card grid with day grouping and a zoom dial, tabs, search/sort/filter, pinning, keyboard navigation, click-to-copy and optional auto-paste, drag-out into other apps, the shelf (`+ Add` stores references), the right-click menu, retention janitor, storage cap, tray with Settings / Enable-Disable, silent autostart, the settings window, and export/import of history and settings.
+
+**Measured and passing** (on DESKTOP-0MFACBN — AMD Ryzen 7 7800X3D, Windows 11, debug build; recorded in `docs/PERF.md` and `docs/DECISIONS.md`):
+
+| Metric | Measured | Target |
+|---|---|---|
+| Hotkey → window visible | **4.1 ms median** (worst 7.0 ms) | < 80 ms |
+| Idle RAM, main process | **45.8 MB median** | < 60 MB |
+| Idle CPU | **0 %** (max 0.36 % of one core) | 0 % |
+| 200-item store page at 10,000 items | **≈ 0.9 ms** | < 10 ms |
+
+**Known miss, under repair:** cold start to tray-ready at 10,000 items was 53 s against the 1.5 s target — the startup integrity sweep is being reworked. *(Number intentionally not quoted; it is about to change.)*
 
 ---
 
@@ -19,11 +36,11 @@ Rebuffer is a replacement for the built-in Windows `Win+V` clipboard history, wi
 
 **Browse**
 - Opens next to your cursor, clamped so the window always fits on the monitor you opened it on
-- Grid of cards, Explorer-style, with a zoom dial you can drag or scroll
+- Grid of cards with a zoom dial you can drag or scroll (`Ctrl`+wheel also zooms)
 - Grouped by day (Today, Yesterday, specific dates), like Explorer's date grouping
 - Tabs: All / Images / Text / Links / Files / Pinned
 - Search, sort (name, size, newest, oldest), and filter by type or exact extension
-- Relative age badge on each card ("14m ago", "3h ago")
+- Relative age badge on each card (`14m`, `3h`, `4d`)
 - Format label on each card (`PNG`, `TXT`, `MP4`)
 - Full keyboard navigation — arrows, Enter, Esc, Ctrl/Shift multi-select
 - Pin anything to keep it past the auto-clean window
@@ -37,9 +54,11 @@ Rebuffer is a replacement for the built-in Windows `Win+V` clipboard history, wi
 **Manage**
 - Auto-clean after 1–30 days (configurable)
 - Optional storage cap — when the store exceeds your limit, the oldest unpinned items are removed and you get a notification
-- Tray icon with two entries: Settings, and Enable/Disable
+- Tray icon with two entries: Settings, and Enable/Disable (left-click opens the popup)
 - Silent autostart with Windows
 - Export/import of history and settings
+
+![The settings window](docs/img/settings.png)
 
 ---
 
@@ -47,15 +66,15 @@ Rebuffer is a replacement for the built-in Windows `Win+V` clipboard history, wi
 
 | Layer | Choice | Why |
 |---|---|---|
-| Shell | Tauri 2 | Native window, small binary, ~40 MB RAM idle |
+| Shell | Tauri 2 | Native window; idle RAM measured at 45.8 MB for the main process |
 | Backend | Rust | Direct WinAPI access for clipboard, hooks, and paste injection |
-| Frontend | Svelte 5 + TypeScript + Vite | Fast cold start; the window must appear in under ~80 ms |
+| Frontend | Svelte 5 + TypeScript + Vite | Hotkey-to-visible measured at 4.1 ms median (target 80 ms) |
 | Database | SQLite (WAL) via `rusqlite` | Crash-safe metadata + FTS5 full-text search |
-| Blobs | Content-addressed files on disk | 256 MB items don't belong in a database row |
+| Blobs | Content-addressed files on disk | Large items don't belong in a database row; thumbnails as WebP |
 
-Windows only. Windows 10 1809+ supported, Windows 11 recommended (Mica/Acrylic backdrop).
+Windows only. Developed and tested on Windows 11; a Windows 10 flat-backdrop fallback exists but has not yet been run on real Windows 10 hardware.
 
-Key crates: `windows`, `arboard`, `rusqlite`, `image`, `blake3`, `window-vibrancy`, `tauri-plugin-global-shortcut`, `tauri-plugin-autostart`, `tauri-plugin-single-instance`, `tauri-plugin-notification`.
+Key crates: `windows`, `arboard`, `rusqlite`, `image`, `webp`, `blake3`, `zip`, `walkdir`, `urlencoding`, `window-vibrancy`, and the Tauri plugins (`global-shortcut`, `autostart`, `single-instance`, `notification`, `dialog`, `opener`). The full list lives in `src-tauri/Cargo.toml`.
 
 ---
 
@@ -98,29 +117,29 @@ Output lands in `src-tauri/target/release/bundle/nsis/`. The build is unsigned, 
 
 ```
 rebuffer/
-├─ src/                     # Svelte frontend
+├─ index.html / settings.html  # the two Vite entry points (popup and settings)
+├─ src/                        # Svelte frontend
+│  ├─ popup.ts / settings.ts   # entry scripts for the two pages
 │  ├─ routes/
-│  │  ├─ Popup.svelte       # the Alt+V window
-│  │  └─ Settings.svelte    # settings window
+│  │  ├─ Popup.svelte          # the Alt+V window
+│  │  └─ Settings.svelte       # settings window
 │  ├─ lib/
-│  │  ├─ components/        # Card, Grid, Tabs, ZoomDial, ContextMenu, ...
-│  │  ├─ stores/            # items, settings, selection
-│  │  └─ styles/            # liquid-glass tokens
-│  └─ main.ts
+│  │  ├─ components/           # Card, Grid, Tabs, ZoomDial, ContextMenu, ...
+│  │  ├─ stores/               # items, settings, selection
+│  │  └─ styles/               # global.css, tokens.css
+│  └─ ipc.ts                   # the only file that talks to the backend
 ├─ src-tauri/
 │  ├─ src/
-│  │  ├─ main.rs
-│  │  ├─ clipboard/         # listener, decoders, writer
-│  │  ├─ hotkey/            # RegisterHotKey + optional LL hook
-│  │  ├─ store/             # SQLite, blob store, janitor
-│  │  ├─ window/            # positioning, vibrancy, focus handling
-│  │  ├─ tray.rs
-│  │  └─ commands.rs        # IPC surface
-│  ├─ migrations/
+│  │  ├─ main.rs / lib.rs
+│  │  ├─ capture.rs            # clipboard capture
+│  │  ├─ clipboard/            # decoders, writer
+│  │  ├─ hotkey/               # RegisterHotKey + optional LL hook
+│  │  ├─ store/                # SQLite, blob store, janitor
+│  │  ├─ window/               # positioning, vibrancy, paste injection
+│  │  ├─ settings.rs / tray.rs / commands.rs / logging.rs / model.rs
+│  ├─ migrations/              # schema (0001_init.sql)
 │  └─ tauri.conf.json
-├─ docs/
-│  ├─ SPEC.md
-│  └─ ROADMAP.md
+├─ docs/                       # SPEC, ROADMAP, DECISIONS, PERF, ...
 └─ README.md
 ```
 
@@ -130,8 +149,9 @@ rebuffer/
 
 ```
 %APPDATA%\Rebuffer\
-├─ rebuffer.db          # metadata + search index
+├─ rebuffer.db          # metadata + search index (+ -wal / -shm)
 ├─ settings.json
+├─ logs\                # rotating tracing logs
 └─ blobs\
    ├─ ab\cd\abcd1234…   # content-addressed originals
    └─ thumbs\           # WebP previews

@@ -162,7 +162,7 @@
     {:else if item.kind === 'text'}
       {#if item.subKind === 'link'}
         <div class="link-preview">
-          <span class="favicon" style="--fav-hue:{domainHue}">{domain ? (domain[0]?.toUpperCase() ?? '?') : '&bull;'}</span>
+          <span class="favicon" style="--fav-hue:{domainHue}">{domain ? (domain[0]?.toUpperCase() ?? '?') : '•'}</span>
           <span class="domain">{domain ?? item.previewText}</span>
           {#if item.title}<span class="link-title">{item.title}</span>{/if}
         </div>

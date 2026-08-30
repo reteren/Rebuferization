@@ -85,10 +85,8 @@ fn get_free_disk_space(_path: &Path) -> Option<u64> {
 /// synchronous path has no such window, and at the corrected cost the sweep
 /// is ~100 ms at 10,000 items — not worth the race.
 pub fn startup_sweep(store: &Store) -> AppResult<()> {
-    let t_sweep = std::time::Instant::now();
     let root = store.root().to_path_buf();
     let blobs_dir = root.join("blobs");
-    let t_walk = std::time::Instant::now();
 
     if !blobs_dir.exists() {
         return Ok(());
@@ -99,32 +97,25 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
     // Reference set #1: every hash referenced by an items row (covers both
     // primary blobs and thumbnails, which are keyed by the item hash).
     let item_hashes: HashSet<String> = {
-        let t = std::time::Instant::now();
         let mut stmt = conn_guard.prepare("SELECT DISTINCT hash FROM items")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        let set = rows.filter_map(|r| r.ok()).collect();
-        eprintln!("[W29] item_hashes: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
-        set
+        rows.filter_map(|r| r.ok()).collect()
     };
 
     // Reference set #2: format blobs, referenced by their `ab/cd/<hash>` rel
     // path. The file-name component IS the hash, so storing that makes the
     // comparison exact instead of a per-file `LIKE '%<hash>'`.
     let format_hashes: HashSet<String> = {
-        let t = std::time::Instant::now();
         let mut stmt = conn_guard
             .prepare("SELECT blob_path FROM item_formats WHERE blob_path IS NOT NULL")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        let set = rows
-            .filter_map(|r| r.ok())
+        rows.filter_map(|r| r.ok())
             .filter_map(|p| {
                 Path::new(&p)
                     .file_name()
                     .map(|f| f.to_string_lossy().into_owned())
             })
-            .collect();
-        eprintln!("[W29] format_hashes: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
-        set
+            .collect()
     };
 
     // One walk over the whole `blobs/` tree. Each file is stat'd exactly once
@@ -133,8 +124,7 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
     // milliseconds even in release, and the `thumbs/` directory alone would
     // otherwise serialize a third of the work. Entries are classified as
     // dir/file from the directory listing's own attributes (no extra syscall).
-let mut existing_blobs: HashSet<String> = HashSet::new();
-    let t_loop = std::time::Instant::now();
+    let mut existing_blobs: HashSet<String> = HashSet::new();
     {
         let thumbs_dir = blobs_dir.join("thumbs");
         let mut seed: VecDeque<(std::path::PathBuf, bool)> = VecDeque::new();
@@ -210,12 +200,10 @@ let mut existing_blobs: HashSet<String> = HashSet::new();
         });
     }
 
-    eprintln!("[W29] walk loop: {:.1} ms", t_loop.elapsed().as_secs_f64() * 1000.0);
     // Part 2: rows whose primary blob is missing on disk. The walk above has
     // already stat'd the tree; this is a set lookup per row, and the DELETE
     // only ever runs for rows that are genuinely broken.
     {
-        let t_rows = std::time::Instant::now();
         let mut stmt = conn_guard.prepare(
             "SELECT id, blob_path FROM items WHERE is_reference = 0 AND blob_path IS NOT NULL",
         )?;
@@ -234,11 +222,8 @@ let mut existing_blobs: HashSet<String> = HashSet::new();
                 let _ = conn_guard.execute("DELETE FROM items WHERE id = ?1", [id]);
             }
         }
-        eprintln!("[W29] row loop: {:.1} ms", t_rows.elapsed().as_secs_f64() * 1000.0);
     }
 
-    eprintln!("[W29] startup_sweep walk+sets: {:.1} ms", t_walk.elapsed().as_secs_f64() * 1000.0);
-    eprintln!("[W29] startup_sweep total: {:.1} ms", t_sweep.elapsed().as_secs_f64() * 1000.0);
     Ok(())
 }
 
@@ -1120,6 +1105,9 @@ mod tests {
         }
 
         // -- timing phase: reopening runs the startup sweep ------------------
+        // The seed store exited cleanly, so Drop wrote the clean-exit marker;
+        // remove it to simulate a crash, forcing the full sweep on reopen.
+        let _ = std::fs::remove_file(root.join(crate::store::CLEAN_EXIT_MARKER));
         let t0 = Instant::now();
         let store = Store::open(&root).unwrap();
         let sweep_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -1147,7 +1135,22 @@ mod tests {
         assert!(formats_ok, "format-only blobs must survive");
         drop(store);
 
-        println!("benchmark_startup_sweep_10k: Store::open took {sweep_ms:.2} ms (items={count})");
+        println!("benchmark_startup_sweep_10k: Store::open (full sweep, post-crash) took {sweep_ms:.2} ms (items={count})");
+
+        // -- fast path: a clean exit wrote the marker, so the next open must
+        // skip the sweep entirely.
+        let t1 = Instant::now();
+        let store2 = Store::open(&root).unwrap();
+        let fast_ms = t1.elapsed().as_secs_f64() * 1000.0;
+        let count2: i64 = store2
+            .conn()
+            .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count2, N);
+        drop(store2);
+        println!(
+            "benchmark_startup_sweep_10k: Store::open (clean exit, sweep skipped) took {fast_ms:.2} ms"
+        );
     }
 }
 
