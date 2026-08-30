@@ -35,7 +35,9 @@ pub fn record_sequence(seq: u32) {
 }
 
 /// RAII Guard ensuring clipboard is always closed on any exit path.
-pub struct ClipboardGuard(bool);
+/// `.0` = the clipboard is open and must be closed. `.1` = we have modified the
+/// clipboard, so our sequence number must be recorded on every exit path.
+pub struct ClipboardGuard(bool, bool);
 
 impl ClipboardGuard {
     /// Attempts to open clipboard with retry and backoff.
@@ -44,7 +46,7 @@ impl ClipboardGuard {
             unsafe {
                 // Sound: OpenClipboard is passed an optional HWND (or None) to open the clipboard exclusively for current thread.
                 if OpenClipboard(hwnd).is_ok() {
-                    return Ok(ClipboardGuard(true));
+                    return Ok(ClipboardGuard(true, false));
                 }
             }
             if attempt < 9 {
@@ -61,6 +63,18 @@ impl Drop for ClipboardGuard {
             unsafe {
                 // Sound: CloseClipboard releases the clipboard lock previously acquired on this thread by OpenClipboard.
                 let _ = CloseClipboard();
+            }
+
+            if self.1 {
+                // EmptyClipboard already fired WM_CLIPBOARDUPDATE, so the
+                // listener will see this change whether or not the write went
+                // on to succeed. Recording the sequence here — on the error
+                // path too — is what stops it from decoding a clipboard we
+                // emptied ourselves and storing the result as a capture.
+                unsafe {
+                    // Sound: GetClipboardSequenceNumber is a thread-safe query with no preconditions.
+                    record_sequence(GetClipboardSequenceNumber());
+                }
             }
         }
     }
@@ -79,13 +93,16 @@ pub fn write_items(store: &Store, ids: &[i64], plain_text: bool) -> AppResult<()
     }
 
     // Open clipboard with retry
-    let _guard = ClipboardGuard::open_with_retry(None)?;
+    let mut _guard = ClipboardGuard::open_with_retry(None)?;
 
     unsafe {
         // Sound: Caller holds open clipboard lock via ClipboardGuard; EmptyClipboard clears contents and assigns ownership to current thread.
         EmptyClipboard()
             .map_err(|e| AppError::Other(format!("EmptyClipboard failed: {e}")))?;
     }
+    // From here on the clipboard carries our change, so the guard owes the
+    // listener a sequence number even if the rest of this function fails.
+    _guard.1 = true;
 
     if ids.len() == 1 {
         let id = ids[0];
@@ -216,14 +233,9 @@ pub fn write_items(store: &Store, ids: &[i64], plain_text: bool) -> AppResult<()
         }
     }
 
-    // Explicitly drop clipboard guard to close before querying sequence number
+    // Closing the clipboard bumps the sequence number, so the guard's Drop both
+    // closes it and records the resulting value.
     drop(_guard);
-
-    unsafe {
-        // Sound: GetClipboardSequenceNumber is a thread-safe Win32 query without preconditions or side effects.
-        let seq = GetClipboardSequenceNumber();
-        record_sequence(seq);
-    }
 
     Ok(())
 }

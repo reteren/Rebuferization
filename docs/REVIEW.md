@@ -39,6 +39,8 @@
 
 ---
 
+- **Resolution**: `should_skip` now matches on `foreground_exe` and fails CLOSED on `None`, skipping the capture and logging at warn. Deliberately not a setting: losing an occasional capture from a process we cannot name is not comparable to storing a password, and a switch would only invite turning the protection off. `get_foreground_process_name` also distinguishes the three cases in its logs — no foreground window (debug, common and harmless), OpenProcess denied (warn, unusual since `PROCESS_QUERY_LIMITED_INFORMATION` is designed to work across integrity levels), and a name that resolves. Regression test `unidentified_process_fails_closed`. The pre-existing `test_process_blocklist_case_insensitive` asserted the fail-open behaviour and was corrected.
+
 ### 2. Blocklist comparison fails when user configures full executable paths
 - **File & Line**: `src-tauri/src/clipboard/privacy.rs:59-69`
 - **Category**: 3 — The Privacy Filter
@@ -53,6 +55,8 @@
   5. The capture bypasses the privacy filter and is written to the database.
 
 ---
+
+- **Resolution**: Added `exe_key`, which trims whitespace and quotes and reduces both the blocklist entry and the identified process to a lowercased file name, so a full path and a bare name are the same entry. Regression test `blocklist_matches_paths_and_bare_names` covers a full path in the blocklist, a mixed-case bare name, a padded entry, and a full path arriving from identification.
 
 ### 3. AB-BA Deadlock between `store.switch_root()` (relocation) and UI store queries
 - **File & Line**: `src-tauri/src/store/mod.rs:124-132`, `src-tauri/src/store/mod.rs:291-301`, `src-tauri/src/store/mod.rs:303-307`
@@ -127,6 +131,8 @@
   7. The listener interprets the empty clipboard state as an external update and attempts to decode it.
 
 ---
+
+- **Resolution**: `ClipboardGuard` carries a second flag, set immediately after `EmptyClipboard` succeeds, and its `Drop` records the clipboard sequence number whenever that flag is set. Recording therefore happens on the error path too, so an early `?` return can no longer leave the listener treating our own emptied clipboard as an external change.
 
 ### 7. Hourly background janitor thread hardcodes `max_store_bytes = None`
 - **File & Line**: `src-tauri/src/store/mod.rs:94-114`

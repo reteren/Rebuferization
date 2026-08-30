@@ -50,20 +50,48 @@ pub struct ClipboardPrivacyFlags {
     pub can_upload_to_cloud: Option<u32>,
 }
 
+/// Reduces a blocklist entry or a process path to a bare, lowercased file name.
+///
+/// The settings UI lets you add a process by browsing to its executable
+/// (SPEC 2.3), which stores a full path, while identification yields a bare
+/// name. Comparing the two as whole strings means the documented way of adding
+/// a process never matches, so both sides are normalized here.
+fn exe_key(value: &str) -> String {
+    let trimmed = value.trim().trim_matches('"');
+    Path::new(trimmed)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase()
+}
+
 /// Pure decision function: returns `true` if the capture should be skipped.
 pub fn should_skip(
     flags: &ClipboardPrivacyFlags,
     foreground_exe: Option<&str>,
     settings: &PrivacySettings,
 ) -> bool {
-    // 1. Process blocklist check (case-insensitive on executable name)
-    if let Some(exe) = foreground_exe {
-        let exe_lower = exe.to_ascii_lowercase();
-        if settings
-            .blocked_processes
-            .iter()
-            .any(|blocked| blocked.to_ascii_lowercase() == exe_lower)
-        {
+    // 1. Process blocklist, matched on the file name so a full path and a bare
+    //    name are the same entry.
+    match foreground_exe {
+        Some(exe) => {
+            let key = exe_key(exe);
+            if settings
+                .blocked_processes
+                .iter()
+                .any(|blocked| exe_key(blocked) == key)
+            {
+                return true;
+            }
+        }
+        // Fail CLOSED. An unidentifiable source is precisely the case where we
+        // cannot show the content is safe to keep, and this filter is the only
+        // thing between the user and a database that is a plaintext password
+        // log. Losing an occasional capture from a process we cannot name is
+        // not comparable to storing a password, which is also why this is not
+        // a setting: a switch here would only invite turning it off.
+        None => {
+            tracing::warn!("skipping capture: foreground process could not be identified");
             return true;
         }
     }
@@ -135,6 +163,9 @@ pub fn get_foreground_process_name() -> Option<String> {
         // Sound: GetForegroundWindow returns the top-level foreground HWND or null safely without side effects.
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() {
+            // Common and harmless: happens while the shell owns the foreground,
+            // during a desktop switch, or on a locked workstation.
+            tracing::debug!("no foreground window at capture time");
             return None;
         }
         let mut pid = 0u32;
@@ -144,9 +175,18 @@ pub fn get_foreground_process_name() -> Option<String> {
             return None;
         }
         // Sound: OpenProcess requests minimal PROCESS_QUERY_LIMITED_INFORMATION rights; handle is closed below via CloseHandle.
+        //
+        // PROCESS_QUERY_LIMITED_INFORMATION exists precisely so an unelevated
+        // process can read another process's image name across integrity
+        // levels, so a denial here is unusual and worth a distinct log line:
+        // callers now fail closed on None, and a silent None would look like a
+        // dropped capture with no explanation.
         let process: HANDLE = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
             Ok(p) => p,
-            Err(_) => return None,
+            Err(e) => {
+                tracing::warn!("OpenProcess denied for pid {pid}: {e}");
+                return None;
+            }
         };
         let mut buf = [0u16; 1024];
         let mut size = buf.len() as u32;
@@ -229,7 +269,12 @@ mod tests {
         assert!(!should_skip(&flags, Some("code.exe"), &settings));
         assert!(!should_skip(&flags, Some("notepad.exe"), &settings));
         assert!(!should_skip(&flags, Some("chrome.exe"), &settings));
-        assert!(!should_skip(&flags, None, &settings));
+
+        // This assertion used to read `!should_skip(..., None, ...)`, which
+        // encoded REVIEW.md finding 1 as if it were intended behaviour: an
+        // unidentifiable source was treated as safe. It is now the opposite,
+        // and `unidentified_process_fails_closed` covers the reasoning.
+        assert!(should_skip(&flags, None, &settings));
     }
 
     #[test]
@@ -280,5 +325,43 @@ mod tests {
         };
         // CanUploadToCloudClipboard = 0 must NOT block
         assert!(!should_skip(&flags_cloud_zero, Some("notepad.exe"), &settings));
+    }
+
+    /// REVIEW.md finding 1. An unidentifiable foreground process must not be
+    /// treated as safe: this is the case the filter exists for.
+    #[test]
+    fn unidentified_process_fails_closed() {
+        let flags = ClipboardPrivacyFlags::default();
+        let settings = PrivacySettings::default();
+        assert!(
+            should_skip(&flags, None, &settings),
+            "a capture from an unidentifiable source must be skipped, not kept"
+        );
+    }
+
+    /// REVIEW.md finding 2. SPEC 2.3 says the settings UI adds a process by
+    /// browsing to its executable, which stores a full path, while
+    /// identification yields a bare name. Both must match.
+    #[test]
+    fn blocklist_matches_paths_and_bare_names() {
+        let flags = ClipboardPrivacyFlags::default();
+        let settings = PrivacySettings {
+            respect_clipboard_flags: true,
+            blocked_processes: vec![
+                r"C:\Program Files\1Password\1password.exe".into(),
+                "  KeePassXC.EXE  ".into(),
+            ],
+        };
+
+        assert!(should_skip(&flags, Some("1password.exe"), &settings));
+        assert!(should_skip(&flags, Some("1PASSWORD.EXE"), &settings));
+        assert!(should_skip(&flags, Some("keepassxc.exe"), &settings));
+        assert!(should_skip(
+            &flags,
+            Some(r"D:\Portable\KeePassXC.exe"),
+            &settings
+        ));
+
+        assert!(!should_skip(&flags, Some("notepad.exe"), &settings));
     }
 }
