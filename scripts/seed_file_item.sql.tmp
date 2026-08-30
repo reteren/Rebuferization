@@ -1,0 +1,7 @@
+BEGIN;
+INSERT INTO items (id, kind, sub_kind, hash, blob_path, thumb_path, is_reference, ref_path, title, preview_text, ext, mime, byte_size, width, height, duration_ms, source_app, copy_count, created_at, first_seen_at, last_used_at, pinned)
+VALUES (100, 'file', NULL, '761c52b96395bec7354ac21db04bee92a766a2fa51ba367b816388c104ccf8d0', '76/1c/761c52b96395bec7354ac21db04bee92a766a2fa51ba367b816388c104ccf8d0', NULL, 0, NULL, NULL, 'DECISIONS.md', 'MD', 'application/octet-stream', 3499, NULL, NULL, NULL, 'seed-tool', 1, 1788112510145, 1788112510145, NULL, 0)
+ON CONFLICT(id) DO UPDATE SET hash='761c52b96395bec7354ac21db04bee92a766a2fa51ba367b816388c104ccf8d0', blob_path='76/1c/761c52b96395bec7354ac21db04bee92a766a2fa51ba367b816388c104ccf8d0', preview_text='DECISIONS.md', ext='MD', byte_size=3499, created_at=1788112510145;
+DELETE FROM item_files WHERE item_id = 100;
+INSERT INTO item_files (item_id, path, file_name, byte_size, position) VALUES (100, 'C:\Rebuferization\docs\DECISIONS.md', 'DECISIONS.md', 3499, 0);
+COMMIT;
