@@ -286,7 +286,7 @@ windows, negative-coordinate monitors, the bottom-right cursor, and a
 left-edge taskbar (`position.rs::tests`). The DPI-scaling of fixed sizes is
 unchanged and was already correct.
 
-### 5. UIPI guard is dead code — FIXED (pending one coordinator change)
+### 5. UIPI guard is dead code — FIXED
 
 `window/paste.rs`: the `sent == 0` check cannot detect UIPI (SendInput
 reports success even when the elevated target filters the input), so
@@ -296,9 +296,9 @@ with ours (`OpenProcess` + `OpenProcessToken` + `GetTokenInformation`
 target is more elevated it logs the SPEC-mandated `warn` and skips, and
 when the comparison cannot be made it logs that and injects anyway. The
 `sent == 0` branch stays as a catch-all for genuine SendInput failures.
-The required `Win32_Security` feature in `src-tauri/Cargo.toml` is the
-coordinator's file — asked for via `ask` (msg_f5656f10b301, currently
-pending). **Not unit-testable** without a live elevated process.
+The required `Win32_Security` feature was added to `src-tauri/Cargo.toml`
+by the coordinator and is confirmed present. **Not unit-testable** without
+a live elevated process.
 
 ### 6. Chord modifiers still down at Ctrl+V — FIXED and TESTED
 
@@ -311,7 +311,7 @@ side that is down). No key-downs are synthesized for released modifiers,
 and nothing is restored afterwards. `build_paste_events` is a pure function
 with five unit tests (`paste.rs::tests`).
 
-### 7. Failed rebind leaves a dead hotkey or a lying file — FIXED (runtime half), one coordinator change offered
+### 7. Failed rebind leaves a dead hotkey or a lying file — FIXED
 
 `hotkey/mod.rs`: `rebind` is now fail-closed — it snapshots the previous
 binding, and if the new one cannot be registered (RegisterHotKey refusal —
@@ -321,15 +321,13 @@ and re-applies the previous binding, then returns `Err`. **Chosen failure
 mode: the previous hotkey keeps working.** Rationale: a dead hotkey is the
 state this codebase already treats as the hardest failure to diagnose, and
 a working old chord plus an `Err` the UI can surface is strictly safer than
-an honest file and no hotkey. Residual: because `commands.rs::update_settings`
-patches (persists) the settings before parse/rebind, the settings file/UI
-can still show a binding the runtime refused — the fix is in the
-coordinator's file (parse before patch and/or roll the hotkey section back
-on rebind error); asked for via `ask` (msg_f5656f10b301, pending). The
-startup path in `lib.rs` is unchanged: a registration refusal still logs
-and leaves the app hotkeyless, but now `rebind` reports it as an `Err`
-instead of a log-only warn. Not unit-tested (needs real hotkey
-registration); exercised by review.
+an honest file and no hotkey. The file half is closed too: `commands.rs::update_settings`
+parses the chord before persisting anything, and rolls the hotkey section
+of settings.json back to the previous binding when `rebind` fails, so the
+file and the runtime cannot disagree. The startup path in `lib.rs` is
+unchanged: a registration refusal still logs and leaves the app hotkeyless,
+but now `rebind` reports it as an `Err` instead of a log-only warn. Not
+unit-tested (needs real hotkey registration); exercised by review.
 
 ### 8. Hidden window never destroyed / class never unregistered — NOT CHANGED, by design
 

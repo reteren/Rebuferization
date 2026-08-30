@@ -20,7 +20,7 @@ use windows::core::{implement, BOOL, HRESULT, PCWSTR};
 use windows::Win32::Foundation::{E_NOTIMPL, E_OUTOFMEMORY, E_POINTER};
 use windows::Win32::Foundation::{
     DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, GlobalFree,
-    OLE_E_ADVISENOTSUPPORTED, POINT, S_FALSE,
+    OLE_E_ADVISENOTSUPPORTED, S_FALSE,
 };
 use windows::Win32::System::Com::{
     CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED, DATADIR_GET,
@@ -628,6 +628,9 @@ fn run_drag(buffer: Vec<u8>) {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    // Only the header-layout test needs POINT, so it lives here rather than in
+    // the main imports (which would warn unused in non-test builds).
+    use windows::Win32::Foundation::POINT;
 
     fn item(id: i64, title: Option<&str>, ext: Option<&str>, preview: Option<&str>) -> ItemDto {
         ItemDto {
