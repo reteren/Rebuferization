@@ -12,23 +12,41 @@
   --surface-2: rgba(30, 34, 44, 0.82);      /* raised controls */
   --surface-3: rgba(38, 42, 55, 0.92);      /* popovers */
   --surface-4: rgba(46, 51, 66, 0.95);      /* hovered controls */
+  --swatch-empty: #3a3f4b;                  /* color-preview fallback when value is missing */
+
+  /* ---- overlays ------------------------------------------------------ */
+  --overlay-1: rgba(255, 255, 255, 0.06);   /* faint white wash: card hover veil, chip fills */
+  --scrim-1: rgba(8, 10, 15, 0.55);         /* dark scrim: play button, color chip */
+  --scrim-2: rgba(10, 13, 18, 0.55);        /* dark scrim: badges over previews */
 
   /* ---- borders ------------------------------------------------------- */
   --border-1: rgba(255, 255, 255, 0.07);
   --border-2: rgba(255, 255, 255, 0.13);
   --border-3: rgba(255, 255, 255, 0.22);
   --window-border: rgba(255, 255, 255, 0.08);  /* 1px inner glass border */
+  --border-media-1: rgba(255, 255, 255, 0.14); /* color chip hairline over scrim */
+  --border-media-2: rgba(255, 255, 255, 0.18); /* play button ring over scrim */
 
   /* ---- text ---------------------------------------------------------- */
   --text-1: #e9ecf4;
   --text-2: rgba(233, 236, 244, 0.62);
   --text-3: rgba(233, 236, 244, 0.38);
+  --text-bright: #ffffff;                   /* pure white glyphs over media and chips */
 
   /* ---- accent (overridden at runtime from settings) ------------------ */
   --accent: #7aa2ff;
   --on-accent: #0a0d14;
   --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
   --accent-strong: color-mix(in srgb, var(--accent) 90%, #ffffff);
+
+  /* ---- ext palette (file-extension accent hues, kept off --accent) --- */
+  --ext-1: #7aa2ff;
+  --ext-2: #4ec9b0;
+  --ext-3: #bb9af7;
+  --ext-4: #e0af68;
+  --ext-5: #f7768e;
+  --ext-6: #2ac3de;
+  --ext-7: #9ece6a;
 
   /* ---- status -------------------------------------------------------- */
   --danger: #f7768e;
@@ -70,6 +88,9 @@
   --grid-gap: 10px;
   --grid-pad: 16px;
   --group-header-h: 32px;
+
+  /* ---- masks --------------------------------------------------------- */
+  --chevron-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.5'/%3E%3C/svg%3E");
 
   /* ---- glass --------------------------------------------------------- */
   --glass-blur: 18px;

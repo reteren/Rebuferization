@@ -74,10 +74,10 @@
   const fileName = $derived(item.fileNames[0] ?? item.title ?? item.refPath ?? 'file')
 
   const extColor = $derived.by(() => {
-    const palette = ['#7aa2ff', '#4ec9b0', '#bb9af7', '#e0af68', '#f7768e', '#2ac3de', '#9ece6a']
+    const palette = ['var(--ext-1)', 'var(--ext-2)', 'var(--ext-3)', 'var(--ext-4)', 'var(--ext-5)', 'var(--ext-6)', 'var(--ext-7)']
     let h = 0
     for (let i = 0; i < formatLabel.length; i++) h = (h * 31 + formatLabel.charCodeAt(i)) >>> 0
-    return palette[h % palette.length] ?? '#7aa2ff'
+    return palette[h % palette.length] ?? 'var(--ext-1)'
   })
 
   function handleClick(e: MouseEvent): void {
@@ -140,7 +140,7 @@
           {#if item.title}<span class="link-title">{item.title}</span>{/if}
         </div>
       {:else if item.subKind === 'color'}
-        <div class="color-preview" style="background:{item.previewText ?? '#3a3f4b'}">
+        <div class="color-preview" style="background:{item.previewText ?? 'var(--swatch-empty)'}">
           <span class="color-chip">{item.previewText}</span>
         </div>
       {:else}
@@ -245,7 +245,7 @@
     position: absolute;
     inset: 0;
     z-index: 4;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--overlay-1);
     opacity: 0;
     transition: opacity var(--dur-fast) var(--ease-out);
     pointer-events: none;
@@ -296,7 +296,7 @@
     inset: 0;
     display: grid;
     place-items: center;
-    color: #ffffff;
+    color: var(--text-bright);
   }
 
   .play::before {
@@ -304,8 +304,8 @@
     width: 34px;
     height: 34px;
     border-radius: 50%;
-    background: rgba(8, 10, 15, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: var(--scrim-1);
+    border: 1px solid var(--border-media-2);
     backdrop-filter: blur(4px);
   }
 
@@ -364,7 +364,7 @@
     place-items: center;
     font-size: 14px;
     font-weight: 700;
-    color: #ffffff;
+    color: var(--text-bright);
     background: linear-gradient(135deg, hsl(var(--fav-hue) 62% 52%), hsl(calc(var(--fav-hue) + 40) 60% 38%));
     box-shadow: var(--shadow-1);
   }
@@ -401,9 +401,9 @@
   .color-chip {
     padding: 3px 8px;
     border-radius: var(--r-sm);
-    background: rgba(8, 10, 15, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    color: #ffffff;
+    background: var(--scrim-1);
+    border: 1px solid var(--border-media-1);
+    color: var(--text-bright);
     font-family: var(--font-mono);
     font-size: var(--fs-2xs);
   }
@@ -456,7 +456,7 @@
     gap: 4px;
     padding: 2px 6px;
     border-radius: var(--r-xs);
-    background: rgba(10, 13, 18, 0.55);
+    background: var(--scrim-2);
     border: 1px solid var(--border-1);
     color: var(--text-2);
     font-size: var(--fs-2xs);

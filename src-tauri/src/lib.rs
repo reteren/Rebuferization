@@ -41,7 +41,9 @@ pub fn run() {
         // A second launch must surface the existing instance, never start a
         // second clipboard listener.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            let _ = window::show_popup(app);
+            if let Err(e) = window::show_popup(app) {
+                tracing::error!("second instance could not show the popup: {e}");
+            }
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // No baked arguments: the plugin writes them into the Run key once at
@@ -73,6 +75,7 @@ pub fn run() {
                 tracing::warn!("could not grant asset access to {}: {e}", store_root.display());
             }
 
+            tracing::info!("rebuffer starting, store at {}", store_root.display());
             let store = Arc::new(Store::open(&store_root)?);
 
             // The store deliberately does not read settings.json, so without
@@ -94,7 +97,13 @@ pub fn run() {
 
             let hotkey_handle = handle.clone();
             let hotkeys = Arc::new(hotkey::HotkeyManager::new(Box::new(move || {
-                let _ = window::show_popup(&hotkey_handle);
+                // Never discard this: the hotkey firing but the window not
+                // appearing is the single hardest failure to diagnose from the
+                // outside, because both look like "the hotkey does not work".
+                tracing::info!("hotkey fired");
+                if let Err(e) = window::show_popup(&hotkey_handle) {
+                    tracing::error!("hotkey fired but the popup did not show: {e}");
+                }
             }))?);
 
             // HotkeyManager::new only builds the machinery; nothing is
@@ -110,8 +119,13 @@ pub fn run() {
                 );
                 hotkey::Chord::parse("Alt+V").expect("the default binding must always parse")
             });
-            if let Err(e) = hotkeys.rebind(&chord, resolved.hotkey.aggressive_mode) {
-                tracing::error!("could not register hotkey {}: {e}", chord.to_display());
+            match hotkeys.rebind(&chord, resolved.hotkey.aggressive_mode) {
+                Ok(()) => tracing::info!(
+                    "hotkey {} registered (aggressive: {})",
+                    chord.to_display(),
+                    resolved.hotkey.aggressive_mode
+                ),
+                Err(e) => tracing::error!("could not register hotkey {}: {e}", chord.to_display()),
             }
 
             // Both windows are created hidden in tauri.conf.json; showing one
