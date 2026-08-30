@@ -10522,3 +10522,9 @@ copy_count before/after (first 6):
   before: 4|1  after: 4|2
   before: 5|1  after: 5|2
   before: 6|1  after: 6|2
+import replace invoke: null
+rows after replace import: 10000
+IMPORT replace restores full history PASS
+db integrity after import: ok
+IMPORT integrity PASS
+=== 07 done ===

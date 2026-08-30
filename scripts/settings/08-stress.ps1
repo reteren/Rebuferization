@@ -79,9 +79,9 @@ WaitW
 Nav $sid 'Appearance'
 Eval $sid "(() => { const r = [...document.querySelectorAll('.content input[type=radio]')].find(x => x.parentElement.textContent.includes('Fixed size')); r.click(); return 'ok'; })()" | Out-Null
 WaitW
-Eval $sid "(() => { const i = document.querySelector('input[aria-label=\"Fixed width\"]'); i.value = '900'; i.dispatchEvent(new Event('change', {bubbles:true})); return 'set'; })()" | Out-Null
+Eval $sid "(() => { const i = [...document.querySelectorAll('.content input')].find(x => x.getAttribute('aria-label') === 'Fixed width'); i.value = '900'; i.dispatchEvent(new Event('change', {bubbles:true})); return 'set'; })()" | Out-Null
 WaitW
-Eval $sid "(() => { const i = document.querySelector('input[aria-label=\"Fixed height\"]'); i.value = '600'; i.dispatchEvent(new Event('change', {bubbles:true})); return 'set'; })()" | Out-Null
+Eval $sid "(() => { const i = [...document.querySelectorAll('.content input')].find(x => x.getAttribute('aria-label') === 'Fixed height'); i.value = '600'; i.dispatchEvent(new Event('change', {bubbles:true})); return 'set'; })()" | Out-Null
 WaitW
 Eval $sid "(() => { const i = [...document.querySelectorAll('.content input[type=number]')].find(x => x.closest('.field')?.textContent.includes('Grid zoom')); i.value = '5'; i.dispatchEvent(new Event('change', {bubbles:true})); return 'set'; })()" | Out-Null
 WaitW

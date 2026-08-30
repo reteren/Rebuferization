@@ -881,6 +881,7 @@ pub fn import(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
     use tempfile::tempdir;
 
     #[test]
@@ -914,6 +915,137 @@ mod tests {
         let remaining = store.list(&crate::model::Filter::default(), crate::model::Sort::Newest, 0, 10).unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, item1.id);
+    }
+
+    /// Seeds a store with 10,000 items, each with a real blob + thumbnail on
+    /// disk, plus format-only blobs, a missing-blob row, and orphan files —
+    /// then times `Store::open`, whose startup sweep has to reconcile all of
+    /// it. This is the W29 cold-start benchmark: the OLD per-file sweep took
+    /// tens of seconds here; the fix must bring it under the SPEC §10 1.5 s
+    /// target. `#[ignore]` so `cargo test` stays fast.
+    #[test]
+    #[ignore = "benchmark: seeds 10k items and times Store::open"]
+    fn benchmark_startup_sweep_10k() {
+        const N: i64 = 10_000;
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // -- seed phase -----------------------------------------------------
+        let mut blob_rels = Vec::with_capacity(N as usize);
+        {
+            let store = Store::open(&root).unwrap();
+            let mut conn = store.conn();
+            let tx = conn.transaction().unwrap();
+
+            // 10k items, each with a real fanout blob + a real thumb file.
+            for i in 0..N {
+                let mut seed = [0u8; 64];
+                seed[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                let hash = crate::store::blobs::compute_hash(&seed);
+                let rel = crate::store::blobs::blob_rel_path(&hash);
+                let target = root.join("blobs").join(&rel);
+                std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+                std::fs::write(&target, &seed).unwrap();
+                let thumb_name = format!("{}.webp", hash);
+                std::fs::write(root.join("blobs").join("thumbs").join(&thumb_name), b"webp").unwrap();
+                blob_rels.push((hash, rel, thumb_name));
+            }
+
+            let mut insert = tx
+                .prepare(
+                    "INSERT INTO items (kind, hash, blob_path, thumb_path, is_reference, byte_size, created_at, first_seen_at)
+                     VALUES ('text', ?1, ?2, ?3, 0, 64, ?4, ?4)",
+                )
+                .unwrap();
+            for (i, (hash, rel, thumb)) in blob_rels.iter().enumerate() {
+                insert
+                    .execute(rusqlite::params![hash, rel, thumb, 1_700_000_000_000i64 + i as i64])
+                    .unwrap();
+            }
+            drop(insert);
+
+            // 5k format blobs referenced ONLY by item_formats (exercises the
+            // format-membership path of the sweep: these must survive).
+            for i in 0..(N / 2) {
+                let mut seed = [0u8; 64];
+                seed[..8].copy_from_slice(&((1u64 << 40) + i as u64).to_le_bytes());
+                let hash = crate::store::blobs::compute_hash(&seed);
+                let rel = crate::store::blobs::blob_rel_path(&hash);
+                let target = root.join("blobs").join(&rel);
+                std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+                std::fs::write(&target, &seed).unwrap();
+                tx.execute(
+                    "INSERT INTO item_formats (item_id, format, blob_path, byte_size)
+                     VALUES ((SELECT id FROM items WHERE hash = ?1), 'application/octet-stream', ?2, 64)",
+                    rusqlite::params![blob_rels[i as usize].0, rel],
+                )
+                .unwrap();
+            }
+
+            // A row whose primary blob is MISSING on disk — the sweep must
+            // delete this row, leaving exactly N items.
+            {
+                let mut seed = [0u8; 64];
+                seed[..8].copy_from_slice(&(1u64 << 63).to_le_bytes());
+                let hash = crate::store::blobs::compute_hash(&seed);
+                let rel = crate::store::blobs::blob_rel_path(&hash); // file NOT written
+                tx.execute(
+                    "INSERT INTO items (kind, hash, blob_path, thumb_path, is_reference, byte_size, created_at, first_seen_at)
+                     VALUES ('text', ?1, ?2, NULL, 0, 64, 1700000000000, 1700000000000)",
+                    rusqlite::params![hash, rel],
+                )
+                .unwrap();
+            }
+
+            tx.commit().unwrap();
+            drop(conn);
+            drop(store);
+
+            // Orphan files the sweep must delete: a stray blob, a stray thumb,
+            // and a leftover tmp file.
+            std::fs::write(root.join("blobs").join("aa/bb/ffaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), b"orphan").unwrap();
+            std::fs::write(root.join("blobs").join("thumbs").join("ffeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.webp"), b"orphan").unwrap();
+            std::fs::write(root.join("blobs").join("cc/dd/ffbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.tmp.1_1_1"), b"tmp").unwrap();
+        }
+
+        // -- timing phase: reopening runs the startup sweep ------------------
+        let t0 = Instant::now();
+        let store = Store::open(&root).unwrap();
+        let sweep_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        // -- assertions: the sweep reconciled everything correctly -----------
+        let count: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, N, "missing-blob row must be deleted");
+        assert!(
+            !root.join("blobs").join("aa/bb/ffaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").exists(),
+            "orphan blob must be deleted"
+        );
+        assert!(
+            !root.join("blobs").join("thumbs/ffeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.webp").exists(),
+            "orphan thumb must be deleted"
+        );
+        assert!(
+            !root.join("blobs").join("cc/dd/ffbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.tmp.1_1_1").exists(),
+            "leftover tmp file must be deleted"
+        );
+        // All 10k item blobs and all 5k format-only blobs must survive.
+        let blobs_ok = blob_rels
+            .iter()
+            .all(|(_, rel, _)| root.join("blobs").join(rel).exists());
+        assert!(blobs_ok, "every referenced item blob must survive");
+        let formats_ok = (0..N / 2).all(|i| {
+            let mut seed = [0u8; 64];
+            seed[..8].copy_from_slice(&((1u64 << 40) + i as u64).to_le_bytes());
+            let hash = crate::store::blobs::compute_hash(&seed);
+            root.join("blobs").join(crate::store::blobs::blob_rel_path(&hash)).exists()
+        });
+        assert!(formats_ok, "format-only blobs must survive");
+        drop(store);
+
+        println!("benchmark_startup_sweep_10k: Store::open took {sweep_ms:.2} ms (items={count})");
     }
 }
 

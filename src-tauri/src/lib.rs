@@ -64,13 +64,25 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
 
+            // Logging comes first. settings.json always lives under the default
+            // root, so its directory is known without reading any settings, and
+            // starting the logger afterwards threw away exactly the messages
+            // worth having: the warning that settings.json was corrupt and was
+            // replaced by defaults went nowhere, so a user whose settings were
+            // silently reset had no way to find out.
             let settings_path = settings::default_store_root().join("settings.json");
+            let log_guard = logging::init(&settings::default_store_root().join("logs"));
+
             let settings = Arc::new(SettingsStore::load(&settings_path)?);
             let resolved = settings.get();
 
-            let log_guard = logging::init(&resolved.store_root().join("logs"));
-
             let store_root = resolved.store_root();
+            if store_root != settings::default_store_root() {
+                tracing::info!(
+                    "store relocated to {}; logs stay under the default root",
+                    store_root.display()
+                );
+            }
 
             // tauri.conf.json scopes the asset protocol to the default store
             // under %APPDATA%. A relocated store lives somewhere else, so widen

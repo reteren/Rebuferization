@@ -440,6 +440,77 @@ async function cdpMetrics(c) {
   return out
 }
 
+const DEEP_DRIVER = (step) => `(async () => {
+  const cands = [...document.querySelectorAll('.grid, .grid-viewport')]
+  const grid = cands.find((g) => g.scrollHeight > g.clientHeight + 10) ?? cands[0]
+  if (!grid) return { error: 'no scroll container' }
+  const times = []
+  const longtasks = []
+  const ltObs = new PerformanceObserver((l) => {
+    for (const e of l.getEntries()) longtasks.push({ d: Math.round(e.duration * 10) / 10, t: Math.round(e.startTime) })
+  })
+  ltObs.observe({ type: 'longtask', buffered: true })
+  const t0 = performance.now()
+  let passes = 0
+  // Follow the spacer as loadMore pages append: keep scrolling down until the
+  // grid stops growing between passes (10,000 items arrive in ~50 pages).
+  while (passes < 90) {
+    const maxScroll = grid.scrollHeight - grid.clientHeight
+    if (grid.scrollTop >= maxScroll - ${step}) {
+      passes++
+      if (passes >= 3) break
+      await new Promise((r) => setTimeout(r, 200))
+      continue
+    }
+    passes = 0
+    await new Promise((resolve) => {
+      let started = false
+      const tick = () => {
+        const now = performance.now()
+        if (started) times.push(now - t0)
+        started = true
+        const max = grid.scrollHeight - grid.clientHeight
+        const next = grid.scrollTop + ${step}
+        if (next >= max) {
+          grid.scrollTop = max
+          times.push(performance.now() - t0)
+          resolve()
+          return
+        }
+        grid.scrollTop = next
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
+  }
+  await new Promise((r) => setTimeout(r, 400))
+  ltObs.disconnect()
+  const deltas = []
+  for (let i = 1; i < times.length; i++) deltas.push(times[i] - times[i - 1])
+  const sorted = [...deltas].sort((a, b) => a - b)
+  const q = (p) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] : 0)
+  const over = (t) => deltas.filter((d) => d > t).length
+  return {
+    mode: 'deep-down',
+    step: ${step},
+    frames: deltas.length,
+    median: Math.round(q(0.5) * 100) / 100,
+    p95: Math.round(q(0.95) * 100) / 100,
+    p99: Math.round(q(0.99) * 100) / 100,
+    worst: sorted.length ? Math.round(sorted[sorted.length - 1] * 100) / 100 : null,
+    over16p7: over(16.7),
+    over33p3: over(33.3),
+    over50: over(50),
+    startScrollHeight: 0,
+    endScrollHeight: Math.round(grid.scrollHeight),
+    endScrollTop: Math.round(grid.scrollTop),
+    cardsBefore: 0,
+    cardsAfter: document.querySelectorAll('.card').length,
+    longtasks,
+    elapsedMs: Math.round((times[times.length - 1] ?? 0) * 10) / 10,
+  }
+})()`
+
 async function main() {
   if (cmd === 'targets') {
     const ts = await getTargets()
@@ -469,6 +540,14 @@ async function main() {
     const [step, dir] = DRIVES[mode]
     await withTarget(popup, async (c) => {
       console.log(JSON.stringify(await evalIn(c, FRAME_DRIVER(mode, step, dir, cycles))))
+    })
+    return
+  }
+
+  if (cmd === 'deep-down') {
+    const step = parseInt(rest[0] || '400', 10)
+    await withTarget(popup, async (c) => {
+      console.log(JSON.stringify(await evalIn(c, DEEP_DRIVER(step))))
     })
     return
   }

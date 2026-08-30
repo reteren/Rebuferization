@@ -56,6 +56,70 @@ flash the Start menu on some Windows builds before the popup appears. The
 settings UI already warns about aggressive mode; this caveat should be listed
 there too.
 
+## W23: popup rendering verification (30 Aug 2026)
+
+Verified against the fresh debug build (post-commit bd8087e, `cargo build` green,
+96 tests pass) on DESKTOP-0MFACBN at 100 % DPI (window DPI = system DPI = 96).
+Evidence: 1:1 `CopyFromScreen` captures + OCR + pixel scans in `scripts/`
+(`verify11.png`, `state2.png`, `sc_00..09.png`, `verify_popup.ps1`,
+`verify_11.ps1`, `gap_scan.ps1`, `popup_inspect.ps1`).
+
+**Renders correctly (visually confirmed):** tabs with live counts, the Today
+group header, age badges (`14m`…), format labels (`TXT`/`JSON`/`URL`/`PNG`), the
+link card with favicon + domain (`github.com`), the file card (`DECISIONS.md`),
+PNG image cards with real thumbnails, the status bar, the empty state, the
+search box, the Newest sort control.
+
+**Text overflow — verdict: NOT real; the earlier bleed impression was a
+downscaling artifact.** At 1:1 there is exactly zero bright (text-like) pixels in
+the 10 px gaps between cards across the full grid; the longest card renders 7
+text lines and the clamp ellipsis, all inside the panel (rightmost glyph 126 px
+vs. 139 px panel content edge). One quirk: with `-webkit-line-clamp: 7` +
+`white-space: pre-wrap`, Blink places the ellipsis on its own 8th line rather
+than at the end of line 7 — cosmetic, not overflow.
+
+**Image thumbnails — the `http://asset.localhost` fix works in the fresh
+binary.** The stale binary's broken-icon state (captured earlier by the previous
+worker in `thumbfix*.png`) is gone: image cards render photo-like content (one
+card: 75 distinct colors, sd 51). Caveat: broken-image icons still appear when
+the item's `thumb_path` file does not exist on disk (11+ items after the other
+worker's import produced `File does not exist at path: …\blobs\thumbs\*.webp`
+asset-protocol errors). The card has no `onerror` fallback and the startup sweep
+only prunes rows with a missing *primary* blob, never a missing thumbnail.
+
+**SPEC 6.3 / 6.5 behaviors:** Esc closes — YES; outside click closes — YES
+(focus-loss dismissal); zoom dial / ctrl+wheel changes tile size — YES (measured
+116 px → 72 px tiles); arrows move focus — YES (2×ArrowRight then Enter copied
+the 3rd grid item); Enter copies the focused item and closes (closeOnCopy) — YES.
+
+**The full variety matrix now verified visually** (capture `scripts/lock_toprow.png`,
+taken under the `scripts/.app-lock` protocol with a fresh app instance whose
+frontend loaded freshly-seeded items): the hex-colour card renders the `#3D8BFD`
+swatch (≈37 k pixels of the exact colour filling the preview area), the code card
+renders the JSON preview in mono (`"schema":`, `"version": 1`, `"items":`…), and
+the link card renders the favicon (green gradient square) plus the 16m/17m/18m
+age badges. Earlier attempts were sabotaged by concurrent verifiers fighting over
+the single app instance (the coordinator's `scripts/APP-LOCK.md` convention
+landed mid-run); under the lock, a single restart + capture produced everything.
+
+**Other findings recorded for the owners:**
+1. `janitor::startup_sweep` is O(blob files) with a `COUNT(*)` per file —
+   tray-ready degraded 1.05 s → 9.5 s → 53 s as the store grew to 7 k/10 k items
+   (details in `docs/PERF.md`).
+2. Several concurrent `rebuffer.exe` instances were observed running at once
+   (three at one point) despite the single-instance plugin — rapid restart races
+   can slip past the guard (the later `scripts/.app-lock` convention now
+   serializes the verifiers that caused this).
+3. Intermittently the popup opened and dismissed itself within ~20 ms (focus-loss
+   race on foreground handoff; reproduced once, see latency section above).
+4. CDP is unreachable with the shipped config (wry overrides the WebView2
+   additional-browser-arguments env var) — see the latency section.
+5. Tooling notes: on this machine the keyboard layout is non-Latin, so keystroke
+   injection must use `SendInput` + `KEYEVENTF_UNICODE` (VK codes silently type
+   Cyrillic); PowerShell 7 static-method binding on `Add-Type` types rejects
+   negative literals and coerced doubles — cast to `[int]` and prefer
+   reflection invocation.
+
 ### Chord parsing / reserved list
 
 `Chord::parse` accepts `Ctrl/Alt/Shift/Win` + letters, digits, `F1`–`F24`, and

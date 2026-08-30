@@ -1,1 +1,0 @@
-SELECT rowid, substr(preview_text,1,30) FROM items_fts WHERE items_fts MATCH '"3D8BFD"*' LIMIT 3; SELECT rowid, substr(preview_text,1,30) FROM items_fts WHERE items_fts MATCH '"lorem"*' LIMIT 3; SELECT rowid, substr(preview_text,1,30) FROM items_fts WHERE items_fts MATCH '"github"*' LIMIT 3;
