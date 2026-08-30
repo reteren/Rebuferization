@@ -31,13 +31,6 @@ use crate::store::blobs::{
 
 const DEFAULT_MAX_ITEM_BYTES: usize = 256 * 1024 * 1024; // 256 MB
 
-/// Marker written on a clean store exit. Its presence at the next open means
-/// the blob tree was left consistent (the WAL was checkpointed on close and
-/// no operation was mid-flight), so the startup integrity sweep can be
-/// skipped. Its absence means the process died mid-operation — the sweep
-/// must run to reconcile crash leftovers. See `Store::open`.
-pub(crate) const CLEAN_EXIT_MARKER: &str = ".rebuffer-clean-exit";
-
 fn current_time_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -104,22 +97,8 @@ impl Store {
 
         let store = Store { inner };
 
-        // Startup integrity sweep. It reconciles the blob tree after a crash
-        // (leftover tmp files, rows whose blob is missing, unreferenced blob
-        // files) — it is NOT needed when the previous run exited cleanly:
-        // `insert_capture` writes each blob before its row, `delete_items`
-        // removes each blob after its row, and every write is atomic
-        // (temp-file + rename), so a clean exit leaves the tree consistent.
-        // A marker written by `StoreInner::drop` records that clean exit;
-        // its presence lets us skip the sweep, its absence means we must run
-        // it. The marker is removed here so that a crash AFTER this point is
-        // still detected on the next start.
-        let marker = root.join(CLEAN_EXIT_MARKER);
-        let clean_exit = marker.exists();
-        let _ = std::fs::remove_file(&marker);
-        if !clean_exit {
-            janitor::startup_sweep(&store)?;
-        }
+        // Run startup integrity sweep
+        janitor::startup_sweep(&store)?;
 
         // Start hourly janitor background thread using a weak reference so StoreInner drops cleanly
         let weak_inner = Arc::downgrade(&store.inner);
@@ -457,12 +436,6 @@ impl Store {
 impl Drop for StoreInner {
     fn drop(&mut self) {
         self.stop_janitor.store(true, Ordering::Relaxed);
-        // Best-effort: the last Arc is dropping during process teardown. If
-        // this write fails (or the process is killed so Drop never runs), the
-        // marker is simply absent and the next open runs the full sweep —
-        // skipping the repair on a genuinely clean exit is the only case that
-        // must be avoided, and it cannot be.
-        let _ = std::fs::write(self.root.read().join(CLEAN_EXIT_MARKER), b"clean");
     }
 }
 

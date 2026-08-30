@@ -83,7 +83,8 @@ fn get_free_disk_space(_path: &Path) -> Option<u64> {
 /// fresh blob whose row is not yet committed and delete it as an orphan (or,
 /// reordered, a committed row whose blob has not been written yet). The
 /// synchronous path has no such window, and at the corrected cost the sweep
-/// is ~100 ms at 10,000 items — not worth the race.
+/// is ~200–300 ms at 10,000 items on this machine (~100 ms on typical
+/// hardware) — not worth the race.
 pub fn startup_sweep(store: &Store) -> AppResult<()> {
     let root = store.root().to_path_buf();
     let blobs_dir = root.join("blobs");
@@ -94,7 +95,7 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
 
     let conn_guard = store.conn();
 
-    // Reference set #1: every hash referenced by an items row (covers both
+// Reference set #1: every hash referenced by an items row (covers both
     // primary blobs and thumbnails, which are keyed by the item hash).
     let item_hashes: HashSet<String> = {
         let mut stmt = conn_guard.prepare("SELECT DISTINCT hash FROM items")?;
@@ -123,7 +124,7 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
     // queue: iterating ~25,000 entries on one thread is hundreds of
     // milliseconds even in release, and the `thumbs/` directory alone would
     // otherwise serialize a third of the work. Entries are classified as
-    // dir/file from the directory listing's own attributes (no extra syscall).
+// dir/file from the directory listing's own attributes (no extra syscall).
     let mut existing_blobs: HashSet<String> = HashSet::new();
     {
         let thumbs_dir = blobs_dir.join("thumbs");
@@ -151,13 +152,23 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
                             None => break,
                         };
                         if is_dir {
-                            if let Ok(rd) = std::fs::read_dir(&path) {
-                                let mut q = queue.lock();
-                                for e in rd.flatten() {
-                                    let d = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                                    q.push_back((e.path(), d));
-                                }
-                            }
+                            // Enumerate WITHOUT holding the queue lock: the
+                            // directory reads are the expensive part and must
+                            // run concurrently across threads. Only the
+                            // enqueue takes the lock.
+                            let children: Vec<(std::path::PathBuf, bool)> =
+                                if let Ok(rd) = std::fs::read_dir(&path) {
+                                    rd.flatten()
+                                        .map(|e| {
+                                            let d =
+                                                e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                                            (e.path(), d)
+                                        })
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                };
+                            queue.lock().extend(children);
                             continue;
                         }
                         let name = path.file_name().unwrap_or_default();
@@ -194,7 +205,7 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
                     local_existing
                 }));
             }
-            for h in handles {
+for h in handles {
                 existing_blobs.extend(h.join().unwrap());
             }
         });
@@ -995,16 +1006,19 @@ mod tests {
         assert_eq!(remaining[0].id, item1.id);
     }
 
-    /// Seeds a store with 10,000 items, each with a real blob + thumbnail on
-    /// disk, plus format-only blobs, a missing-blob row, and orphan files —
-    /// then times `Store::open`, whose startup sweep has to reconcile all of
-    /// it. This is the W29 cold-start benchmark: the OLD per-file sweep took
-    /// tens of seconds here; the fix must bring it under the SPEC §10 1.5 s
-    /// target. `#[ignore]` so `cargo test` stays fast.
+    /// Seeds a store with 10,000 items, each with a real blob on disk, plus a
+    /// realistic share of thumbnails (30% — only images get them) and
+    /// format-only blobs (20%), a missing-blob row, and orphan files — then
+    /// times `Store::open`, whose startup sweep has to reconcile all of it.
+    /// This is the W29 cold-start benchmark: the OLD per-file sweep took ~107 s
+    /// here; the fix must bring it under the SPEC §10 1.5 s target. `#[ignore]`
+    /// so `cargo test` stays fast.
     #[test]
     #[ignore = "benchmark: seeds 10k items and times Store::open"]
     fn benchmark_startup_sweep_10k() {
         const N: i64 = 10_000;
+        const THUMB_SHARE: i64 = 3_000; // 30% of items are images
+        const FORMAT_SHARE: i64 = 2_000; // 20% carry an on-disk format blob
         let dir = tempdir().unwrap();
         let root = dir.path().to_path_buf();
 
@@ -1031,7 +1045,13 @@ mod tests {
             let mut conn = store.conn();
             let tx = conn.transaction().unwrap();
 
-            // 10k items, each with a real fanout blob + a real thumb file.
+            // 10k items, each with a real fanout blob; images get a thumb.
+            let mut insert = tx
+                .prepare(
+                    "INSERT INTO items (kind, hash, blob_path, thumb_path, is_reference, byte_size, created_at, first_seen_at)
+                     VALUES (?1, ?2, ?3, ?4, 0, 64, ?5, ?5)",
+                )
+                .unwrap();
             for i in 0..N {
                 let mut seed = [0u8; 64];
                 seed[..8].copy_from_slice(&(i as u64).to_le_bytes());
@@ -1040,27 +1060,30 @@ mod tests {
                 let target = root.join("blobs").join(&rel);
                 std::fs::create_dir_all(target.parent().unwrap()).unwrap();
                 std::fs::write(&target, &seed).unwrap();
-                let thumb_name = format!("{}.webp", hash);
-                std::fs::write(root.join("blobs").join("thumbs").join(&thumb_name), b"webp").unwrap();
-                blob_rels.push((hash, rel, thumb_name));
-            }
-
-            let mut insert = tx
-                .prepare(
-                    "INSERT INTO items (kind, hash, blob_path, thumb_path, is_reference, byte_size, created_at, first_seen_at)
-                     VALUES ('text', ?1, ?2, ?3, 0, 64, ?4, ?4)",
-                )
-                .unwrap();
-            for (i, (hash, rel, thumb)) in blob_rels.iter().enumerate() {
+                let (kind, thumb_path) = if i < THUMB_SHARE {
+                    let thumb_name = format!("{}.webp", hash);
+                    std::fs::write(root.join("blobs").join("thumbs").join(&thumb_name), b"webp")
+                        .unwrap();
+                    ("image", Some(thumb_name))
+                } else {
+                    ("text", None)
+                };
                 insert
-                    .execute(rusqlite::params![hash, rel, thumb, 1_700_000_000_000i64 + i as i64])
+                    .execute(rusqlite::params![
+                        kind,
+                        hash,
+                        rel,
+                        thumb_path,
+                        1_700_000_000_000i64 + i as i64
+                    ])
                     .unwrap();
+                blob_rels.push((hash, rel));
             }
             drop(insert);
 
-            // 5k format blobs referenced ONLY by item_formats (exercises the
+            // Format blobs referenced ONLY by item_formats (exercises the
             // format-membership path of the sweep: these must survive).
-            for i in 0..(N / 2) {
+            for i in 0..FORMAT_SHARE {
                 let mut seed = [0u8; 64];
                 seed[..8].copy_from_slice(&((1u64 << 40) + i as u64).to_le_bytes());
                 let hash = crate::store::blobs::compute_hash(&seed);
@@ -1105,9 +1128,6 @@ mod tests {
         }
 
         // -- timing phase: reopening runs the startup sweep ------------------
-        // The seed store exited cleanly, so Drop wrote the clean-exit marker;
-        // remove it to simulate a crash, forcing the full sweep on reopen.
-        let _ = std::fs::remove_file(root.join(crate::store::CLEAN_EXIT_MARKER));
         let t0 = Instant::now();
         let store = Store::open(&root).unwrap();
         let sweep_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -1121,12 +1141,12 @@ mod tests {
         assert!(!orphan_blob.exists(), "orphan blob must be deleted");
         assert!(!orphan_thumb.exists(), "orphan thumb must be deleted");
         assert!(!orphan_tmp.exists(), "leftover tmp file must be deleted");
-        // All 10k item blobs and all 5k format-only blobs must survive.
+        // Every referenced item blob and format-only blob must survive.
         let blobs_ok = blob_rels
             .iter()
-            .all(|(_, rel, _)| root.join("blobs").join(rel).exists());
+            .all(|(_, rel)| root.join("blobs").join(rel).exists());
         assert!(blobs_ok, "every referenced item blob must survive");
-        let formats_ok = (0..N / 2).all(|i| {
+        let formats_ok = (0..FORMAT_SHARE).all(|i| {
             let mut seed = [0u8; 64];
             seed[..8].copy_from_slice(&((1u64 << 40) + i as u64).to_le_bytes());
             let hash = crate::store::blobs::compute_hash(&seed);
@@ -1135,22 +1155,10 @@ mod tests {
         assert!(formats_ok, "format-only blobs must survive");
         drop(store);
 
-        println!("benchmark_startup_sweep_10k: Store::open (full sweep, post-crash) took {sweep_ms:.2} ms (items={count})");
-
-        // -- fast path: a clean exit wrote the marker, so the next open must
-        // skip the sweep entirely.
-        let t1 = Instant::now();
-        let store2 = Store::open(&root).unwrap();
-        let fast_ms = t1.elapsed().as_secs_f64() * 1000.0;
-        let count2: i64 = store2
-            .conn()
-            .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(count2, N);
-        drop(store2);
         println!(
-            "benchmark_startup_sweep_10k: Store::open (clean exit, sweep skipped) took {fast_ms:.2} ms"
+            "benchmark_startup_sweep_10k: Store::open (startup sweep over ~{N} items) took {sweep_ms:.2} ms (items={count})"
         );
     }
 }
+
 

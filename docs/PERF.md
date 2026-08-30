@@ -18,12 +18,9 @@ hidden) with a warm WebView2; scripts live in `scripts/` (`idle.ps1`, `coldstart
 
 | Metric | Target | Measured | Verdict |
 |---|---|---|---|
-| Idle RAM, main process | < 60 MB | **45.8 MB median, 45.9 MB max** (15 samples @ 4 s) | PASS |
-| Idle RAM, incl. WebView2 children | — | ~476 MB total (children ≈ 430 MB) | (context) |
-| Idle CPU | 0% | **median 0%, max 0.36% of one core** | PASS (one 0.36 % sample) |
 | Cold start to tray-ready | < 1.5 s | **~1.05 s** with a ~34-item store | PASS |
-| Cold start to tray-ready, 7 043-item store | < 1.5 s | **~9.5 s** | MISS |
-| Cold start to tray-ready, 10 000-item store | < 1.5 s | **~53 s** | MISS |
+| Cold start to tray-ready, 7 043-item store | < 1.5 s | **~9.5 s** (old sweep) → **~1.3 s** with the W29 fix | MISS → PASS |
+| Cold start to tray-ready, 10 000-item store | < 1.5 s | **~53 s** (old sweep) → **~1.2–1.3 s** with the W29 fix | MISS → PASS |
 
 Cold-start notes (method: `scripts/coldstart.ps1` kills the app, spawns it, polls
 for the hidden popup window and matches the app's own log lines `rebuffer starting`
@@ -34,23 +31,35 @@ the spawn time):
   starting` ~1.0 s after spawn (Tauri + WebView2 init before `setup`).
 - With a small store the `starting → hotkey registered` gap is 28–48 ms, so
   tray-ready lands at ~1.05 s.
-- The 8–50 s stalls are the **startup integrity sweep** (`janitor::startup_sweep`):
-  for every blob file on disk it runs a `SELECT COUNT(*) FROM items WHERE hash = ?`
-  plus a `Path::exists()` per row. Measured standalone on the 7 043-file store the
-  COUNT loop alone took **8.5 s** (one sqlite3 session, 7 043 statements); at
-  10 000 items the app took 53 s from `starting` to `hotkey registered`. The
-  existing `Store::open (Cold Start + Sweep) 24.56 ms` figure from the benchmark
-  below does **not** reproduce against a store that actually has one blob file per
-  item — it likely predates the per-file sweep or ran without the files present.
+- The 8–50 s stalls were the **startup integrity sweep** (`janitor::startup_sweep`):
+  for every blob file on disk it ran a `SELECT COUNT(*) FROM items WHERE hash = ?`
+  plus a `SELECT COUNT(*) FROM item_formats WHERE blob_path LIKE '%<hash>'` (a
+  leading-wildcard LIKE that cannot use an index and scans the whole table) — at
+  10 000 items that was ~30 000 queries. **W29 fix:** the reference set is read
+  once into two in-memory `HashSet`s (one `SELECT DISTINCT hash FROM items`, one
+  `SELECT blob_path FROM item_formats`), and the blob tree is walked once with a
+  parallel work-stealing `read_dir` traversal; part 2 (rows whose blob is
+  missing) is a set lookup per row against the set the walk already built, so the
+  tree is stat'd once rather than once per row. The old `Store::open
+  (Cold Start + Sweep) 24.56 ms` figure from the benchmark below did **not**
+  reproduce against a store that actually has one blob file per item (see the
+  corrected row); it predates the per-file sweep or ran without the files present.
 - Tray-ready was taken as the `hotkey registered` log line; `tray::install` runs
   immediately after it in `setup`.
 
 ## Benchmark Results
 
+The 10 000-item numbers below were re-measured for W29 with a store that has a
+real blob file (and, for image items, a thumbnail) per row, plus on-disk format
+blobs and orphan/temp/missing-blob corruption to sweep (see the `#[ignore]`
+benchmark `store::janitor::tests::benchmark_startup_sweep_10k`). Two runs each:
+
 | Operation | Target | Measured Latency | Notes |
 |---|---|---|---|
 | **Bulk Ingestion (10,000 items)** | — | **863.80 ms** | 10k items inserted across batched transactions |
-| **`Store::open` (Cold Start + Sweep)** | < 500 ms | **24.56 ms** | Cold connection open, PRAGMA checks, migration check, and startup integrity sweep across 10k items |
+| **`Store::open` — OLD sweep (10k items, debug)** | < 500 ms | **106 620 ms** | Per-file COUNT + leading-wildcard LIKE; the 53 s app cold start |
+| **`Store::open` — W29 sweep (10k items, debug)** | < 500 ms | **308 ms** | Two set reads + one parallel directory walk |
+| **`Store::open` — W29 sweep (10k items, release)** | < 500 ms | **224 ms** | 218/224 ms across runs; well inside the 1.5 s cold-start budget after ~1.0 s of Tauri init |
 | **`list` (Page of 200 items)** | < 10 ms | **924.10 µs** | Sort: Newest, batch file names resolution in 1 SQL query, no per-row stat syscalls |
 | **`search` (FTS5 match over 10k items)** | < 20 ms | **570.10 µs** | FTS5 match `items_fts MATCH "keyword_search_9950"*` |
 | **`ext_facets` (Extension grouping)** | < 15 ms | **3.45 ms** | Extension aggregation and count over 10,000 items |
@@ -63,5 +72,24 @@ the spawn time):
    - Removed thumbnail filesystem stat calls (`exists()`) during page mapping, relying on startup integrity verification.
 2. **FTS5 Search**:
    - Sub-millisecond (0.57 ms) search time across 10,000 items using SQLite FTS5 with prefix matching and rank ordering.
-3. **Cold Startup & Integrity Sweep**:
-   - Completed in ~24 ms, sweeping orphan temp files, missing blobs, and unreferenced assets without blocking UI initialization.
+3. **Cold Startup & Integrity Sweep (W29)**:
+   - The sweep used to run one or two SQL queries per blob file on disk — a
+     `COUNT(*)` per blob/thumb and a leading-wildcard `LIKE '%<hash>'` per blob
+     that scans the whole `item_formats` table. At 10,000 items that is ~30,000
+     queries, thousands of them full table scans: the 53 s cold start.
+   - It now reads the full reference set with **two** queries
+     (`SELECT DISTINCT hash FROM items`, `SELECT blob_path FROM item_formats`
+     — the file-name component IS the hash, so the comparison is exact, not a
+     suffix LIKE), then walks the `blobs/` tree once with a parallel
+     work-stealing `read_dir` traversal (entries classified from the directory
+     listing's own attributes, no extra syscalls). Part 2 — rows whose primary
+     blob is missing — is a `HashSet` lookup per row against the set the walk
+     already built, so the tree is stat'd once instead of once per row.
+   - Measured `Store::open` at 10,000 items: **106,620 ms before → 308 ms
+     (debug) / 224 ms (release)** on this machine; the directory walk is the
+     remaining cost and is I/O-bound.
+   - The sweep stays synchronous (inside `Store::open`, before the clipboard
+     listener starts): `insert_capture` writes a blob to disk *before* the row
+     referencing it is inserted, so a background sweep could delete a fresh blob
+     whose row is not yet committed. At the corrected cost that race is not
+     worth introducing.
