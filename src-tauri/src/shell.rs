@@ -640,6 +640,7 @@ mod tests {
             title: title.map(String::from),
             preview_text: preview.map(String::from),
             thumb_url: None,
+            animated_url: None,
             ext: ext.map(String::from),
             byte_size: 0,
             width: None,

@@ -46,7 +46,8 @@ renders. `src/routes/Popup.svelte` (W6) is where the two meet.
 ```ts
 // Card.svelte
 { item: ItemDto, selected: boolean, focused: boolean, zoom: number,
-  showAge: boolean, formatLabelSize: 'off'|'small'|'medium'|'large' }
+  showAge: boolean, formatLabelSize: 'off'|'small'|'medium'|'large',
+  animateGifs: boolean }
 // events: onactivate(item), oncontextmenu(item, x, y), ontoggle(item, mode:'single'|'ctrl'|'shift')
 // The root element carries `draggable="true"` and `data-id={item.id}`. Card
 // itself has NO dragstart handler: W6 delegates one listener on the grid

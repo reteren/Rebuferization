@@ -122,6 +122,21 @@ pub fn map_rows_to_items(
             let kind = Kind::parse(&r.kind_str);
             let sub_kind = r.sub_kind_str.as_deref().and_then(SubKind::parse);
 
+            // An animated item also carries a URL to its ORIGINAL blob: the
+            // thumbnail is one frame re-encoded as static WebP, so rendering a
+            // GIF from it can never move.
+            let animated_url = if sub_kind == Some(SubKind::Animated) {
+                r._blob_path.as_ref().map(|b| {
+                    let abs = root.join("blobs").join(b);
+                    format!(
+                        "http://asset.localhost/{}",
+                        urlencoding::encode(&abs.to_string_lossy())
+                    )
+                })
+            } else {
+                None
+            };
+
             let thumb_url = r.thumb_path.map(|t| {
                 let abs_thumb = root.join("blobs").join("thumbs").join(t);
                 // Windows serves Tauri's custom protocols over
@@ -152,6 +167,7 @@ pub fn map_rows_to_items(
                 title: r.title,
                 preview_text: r.preview_text,
                 thumb_url,
+                animated_url,
                 ext: r.ext,
                 byte_size: r.byte_size,
                 width: r.width,

@@ -85,8 +85,10 @@ fn get_free_disk_space(_path: &Path) -> Option<u64> {
 /// synchronous path has no such window, and at the corrected cost the sweep
 /// is ~100 ms at 10,000 items — not worth the race.
 pub fn startup_sweep(store: &Store) -> AppResult<()> {
+    let t_sweep = std::time::Instant::now();
     let root = store.root().to_path_buf();
     let blobs_dir = root.join("blobs");
+    let t_walk = std::time::Instant::now();
 
     if !blobs_dir.exists() {
         return Ok(());
@@ -97,69 +99,102 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
     // Reference set #1: every hash referenced by an items row (covers both
     // primary blobs and thumbnails, which are keyed by the item hash).
     let item_hashes: HashSet<String> = {
+        let t = std::time::Instant::now();
         let mut stmt = conn_guard.prepare("SELECT DISTINCT hash FROM items")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.filter_map(|r| r.ok()).collect()
+        let set = rows.filter_map(|r| r.ok()).collect();
+        eprintln!("[W29] item_hashes: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+        set
     };
 
     // Reference set #2: format blobs, referenced by their `ab/cd/<hash>` rel
     // path. The file-name component IS the hash, so storing that makes the
     // comparison exact instead of a per-file `LIKE '%<hash>'`.
     let format_hashes: HashSet<String> = {
+        let t = std::time::Instant::now();
         let mut stmt = conn_guard
             .prepare("SELECT blob_path FROM item_formats WHERE blob_path IS NOT NULL")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.filter_map(|r| r.ok())
+        let set = rows
+            .filter_map(|r| r.ok())
             .filter_map(|p| {
                 Path::new(&p)
                     .file_name()
                     .map(|f| f.to_string_lossy().into_owned())
             })
-            .collect()
+            .collect();
+        eprintln!("[W29] format_hashes: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+        set
     };
 
     // One walk over the whole `blobs/` tree. Each file is stat'd exactly once
-    // and never costs a query.
+    // and never costs a query. WalkDir was measurably slower here (per-entry
+    // metadata round-trips in debug builds); a manual `read_dir` recursion
+    // reuses the attributes the directory listing already carries.
     let mut existing_blobs: HashSet<String> = HashSet::new();
-    for entry in WalkDir::new(&blobs_dir).into_iter().flatten() {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.path();
-        let file_name = entry.file_name().to_string_lossy();
-
-        // Part 1: leftover temp files (atomic-write leftovers from a crash).
-        if file_name.contains(".tmp.") || file_name.ends_with(".tmp") {
-            let _ = std::fs::remove_file(path);
-            continue;
-        }
-
-        if path.starts_with(&blobs_dir.join("thumbs")) {
-            // Part 3, thumbnails: a thumb is keyed by the item hash.
-            if let Some(hash) = file_name.strip_suffix(".webp") {
-                if !item_hashes.contains(hash) {
-                    let _ = std::fs::remove_file(path);
+    let t_loop = std::time::Instant::now();
+    let mut n_files = 0usize;
+    {
+        let thumbs_dir = blobs_dir.join("thumbs");
+        let mut stack: Vec<std::path::PathBuf> = vec![blobs_dir.clone()];
+        while let Some(dir) = stack.pop() {
+            let in_thumbs = dir == thumbs_dir;
+            let read = match std::fs::read_dir(&dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            for entry in read {
+                let Ok(entry) = entry else { continue };
+                let Ok(ft) = entry.file_type() else { continue };
+                if ft.is_dir() {
+                    stack.push(entry.path());
+                    continue;
                 }
-            }
-        } else {
-            // Part 3, primary blobs: record the rel path (feeds part 2), then
-            // delete the file if neither reference set knows its hash.
-            if let Ok(rel) = path.strip_prefix(&blobs_dir) {
-                existing_blobs.insert(normalize_rel(rel));
-            }
-            if file_name.len() == 64 {
-                let hash = file_name.as_ref();
-                if !item_hashes.contains(hash) && !format_hashes.contains(hash) {
-                    let _ = std::fs::remove_file(path);
+                if !ft.is_file() {
+                    continue;
+                }
+                n_files += 1;
+                let path = entry.path();
+                let name = entry.file_name();
+                let name_s = name.to_string_lossy();
+
+                // Part 1: leftover temp files (atomic-write leftovers from a crash).
+                if name_s.contains(".tmp.") || name_s.ends_with(".tmp") {
+                    let _ = std::fs::remove_file(&path);
+                    continue;
+                }
+
+                if in_thumbs {
+                    // Part 3, thumbnails: a thumb is keyed by the item hash.
+                    if let Some(hash) = name_s.strip_suffix(".webp") {
+                        if !item_hashes.contains(hash) {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                } else {
+                    // Part 3, primary blobs: record the rel path (feeds part
+                    // 2), then delete the file if neither reference set knows
+                    // its hash.
+                    if let Ok(rel) = path.strip_prefix(&blobs_dir) {
+                        existing_blobs.insert(normalize_rel(rel));
+                    }
+                    if name_s.len() == 64 {
+                        let hash = name_s.as_ref();
+                        if !item_hashes.contains(hash) && !format_hashes.contains(hash) {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
                 }
             }
         }
     }
 
+    eprintln!("[W29] walk loop: {:.1} ms for {} files", t_loop.elapsed().as_secs_f64() * 1000.0, n_files);
     // Part 2: rows whose primary blob is missing on disk. The walk above has
     // already stat'd the tree; this is a set lookup per row, and the DELETE
     // only ever runs for rows that are genuinely broken.
     {
+        let t_rows = std::time::Instant::now();
         let mut stmt = conn_guard.prepare(
             "SELECT id, blob_path FROM items WHERE is_reference = 0 AND blob_path IS NOT NULL",
         )?;
@@ -178,8 +213,11 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
                 let _ = conn_guard.execute("DELETE FROM items WHERE id = ?1", [id]);
             }
         }
+        eprintln!("[W29] row loop: {:.1} ms", t_rows.elapsed().as_secs_f64() * 1000.0);
     }
 
+    eprintln!("[W29] startup_sweep walk+sets: {:.1} ms", t_walk.elapsed().as_secs_f64() * 1000.0);
+    eprintln!("[W29] startup_sweep total: {:.1} ms", t_sweep.elapsed().as_secs_f64() * 1000.0);
     Ok(())
 }
 

@@ -379,6 +379,7 @@ function base(rnd: () => number, id: number, createdAt: number, kind: Kind, extr
     id,
     kind,
     subKind: null,
+    animatedUrl: null,
     title: null,
     previewText: null,
     thumbUrl: null,

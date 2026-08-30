@@ -81,6 +81,12 @@ pub struct ItemDto {
     pub title: Option<String>,
     pub preview_text: Option<String>,
     pub thumb_url: Option<String>,
+    /// The ORIGINAL blob, populated only for `sub_kind = animated`. Thumbnails
+    /// are a single decoded frame re-encoded as static WebP, so an animated GIF
+    /// can never move when rendered from `thumb_url` — which is why
+    /// `appearance.animateGifs` did nothing at all. The card picks between the
+    /// two according to that setting.
+    pub animated_url: Option<String>,
     pub ext: Option<String>,
     pub byte_size: i64,
     pub width: Option<i64>,

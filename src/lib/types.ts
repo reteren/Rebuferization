@@ -11,6 +11,10 @@ export interface ItemDto {
   title: string | null
   previewText: string | null
   thumbUrl: string | null
+  /// The original blob, present only for animated items. A thumbnail is one
+  /// decoded frame re-encoded as static WebP, so rendering an animated GIF from
+  /// thumbUrl can never move it.
+  animatedUrl: string | null
   ext: string | null
   byteSize: number
   width: number | null
