@@ -12,7 +12,7 @@ New-Item -ItemType Directory -Path $shot -Force | Out-Null
 function Get-Targets { & node "$PSScriptRoot\cdp.mjs" targets }
 
 $targets = Get-Targets
-$popup = ($targets | ConvertFrom-Json | Where-Object { $_.url -like '*index.html*' } | Select-Object -First 1)
+$popup = ($targets | ConvertFrom-Json | Where-Object { $_.url -like '*settings.html*' -eq $false } | Select-Object -First 1)
 $settings = ($targets | ConvertFrom-Json | Where-Object { $_.url -like '*settings.html*' } | Select-Object -First 1)
 if (-not $popup) { throw 'popup target not found' }
 if (-not $settings) { throw 'settings target not found' }
@@ -27,7 +27,7 @@ Write-Host "popup after hotkey: $vis"
 & node "$PSScriptRoot\cdp.mjs" shot $popup.id "$shot\00-popup-after-hotkey.png"
 
 # Route A continues: click the gear (aria-label "Open settings")
-& node "$PSScriptRoot\cdp.mjs" eval $popup.id "(() => { const b = document.querySelector('button[aria-label=\"Open settings\"]'); if (!b) return 'NO_GEAR'; b.click(); return 'CLICKED'; })()"
+& node "$PSScriptRoot\cdp.mjs" eval $popup.id "(() => { const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === 'Open settings'); if (!b) return 'NO_GEAR'; b.click(); return 'CLICKED'; })()"
 Start-Sleep -Seconds 2
 
 $visSettings = & node "$PSScriptRoot\cdp.mjs" eval $settings.id "document.visibilityState + '|' + document.title"

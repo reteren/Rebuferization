@@ -1,0 +1,12 @@
+Privacy
+---CONTROLS---
+INPUT:checkbox:on
+BUTTON[Remove keepass.exe]:submit:├Ч
+BUTTON[Remove keepassxc.exe]:submit:├Ч
+BUTTON[Remove 1password.exe]:submit:├Ч
+BUTTON[Remove bitwarden.exe]:submit:├Ч
+BUTTON[Remove lastpass.exe]:submit:├Ч
+BUTTON[Remove dashlane.exe]:submit:├Ч
+BUTTON[Remove protonpass.exe]:submit:├Ч
+INPUT:text:
+BUTTON:submit:Add

@@ -18,7 +18,7 @@
       "width": 1100,
       "height": 700
     },
-    "zoomStep": 3
+    "zoomStep": 1
   },
   "behavior": {
     "autoPaste": false,

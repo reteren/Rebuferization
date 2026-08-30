@@ -102,7 +102,7 @@ async function main() {
     return
   }
   if (cmd === 'shot') {
-    const file = rest[2]
+    const file = rest[1]
     await withTarget(id, async (c) => {
       await c.send('Page.enable')
       await sleep(250)

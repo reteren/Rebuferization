@@ -15,7 +15,7 @@ New-Item -ItemType Directory -Path $snap -Force | Out-Null
 $testItems = Join-Path $snap 'test-items.txt'
 $targets = & node "$PSScriptRoot\cdp.mjs" targets
 $s = ($targets | ConvertFrom-Json | Where-Object { $_.url -like '*settings.html*' } | Select-Object -First 1)
-$p = ($targets | ConvertFrom-Json | Where-Object { $_.url -like '*index.html*' } | Select-Object -First 1)
+$p = ($targets | ConvertFrom-Json | Where-Object { $_.url -notlike '*settings.html*' } | Select-Object -First 1)
 if (-not $s -or -not $p) { throw 'targets not found' }
 $sid = $s.id; $pid = $p.id
 

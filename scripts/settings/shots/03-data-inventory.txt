@@ -1,0 +1,8 @@
+Data
+---CONTROLS---
+BUTTON:submit:ExportтАж
+INPUT:radio:on
+INPUT:radio:on
+BUTTON:submit:ImportтАж
+BUTTON:submit:Clear history
+BUTTON:submit:Reset everything

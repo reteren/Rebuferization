@@ -1,0 +1,11 @@
+General
+---CONTROLS---
+BUTTON[Hotkey тАФ click to record]:submit:Alt+V
+BUTTON:submit:Record
+INPUT:checkbox:on
+INPUT:checkbox:on
+INPUT:checkbox:on
+INPUT:checkbox:on
+INPUT:checkbox:on
+INPUT:checkbox:on
+INPUT:checkbox:on
