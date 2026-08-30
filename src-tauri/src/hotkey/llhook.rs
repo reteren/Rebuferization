@@ -124,29 +124,73 @@ unsafe extern "system" fn ll_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM
     // lparam points to a KBDLLHOOKSTRUCT owned by the system for the duration
     // of this callback; the cast is the documented access pattern.
     let ks = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-    if ks.vkCode != shared.vk.load(Ordering::Relaxed) {
-        return call_next(code, wparam, lparam);
-    }
-    if !mods_match(shared) {
-        return call_next(code, wparam, lparam);
-    }
-    if ks.flags.contains(LLKHF_UP) {
-        // Swallow the keyup of a swallowed keydown and re-arm for the next
-        // press.
-        shared.hook_armed.store(true, Ordering::Relaxed);
-        return LRESULT(1);
-    }
-    // Keydown (auto-repeat included): swallow, but only post once per press.
-    if shared.hook_armed.swap(false, Ordering::Relaxed) {
-        let hwnd = HWND(shared.hwnd.load(Ordering::Relaxed) as *mut c_void);
-        if !hwnd.is_invalid() {
-            // FFI: hwnd is the live hidden window of this process.
-            unsafe {
-                let _ = PostMessageW(Some(hwnd), WM_APP_TRIGGER, WPARAM(0), LPARAM(0));
+
+    let mut armed = shared.hook_armed.load(Ordering::Relaxed);
+    let decision = decide_hook(
+        &mut armed,
+        ks.vkCode == shared.vk.load(Ordering::Relaxed),
+        ks.flags.contains(LLKHF_UP),
+        mods_match(shared),
+    );
+    shared.hook_armed.store(armed, Ordering::Relaxed);
+
+    match decision {
+        HookDecision::Pass => call_next(code, wparam, lparam),
+        HookDecision::Swallow => LRESULT(1),
+        HookDecision::SwallowAndFire => {
+            let hwnd = HWND(shared.hwnd.load(Ordering::Relaxed) as *mut c_void);
+            if !hwnd.is_invalid() {
+                // FFI: hwnd is the live hidden window of this process.
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), WM_APP_TRIGGER, WPARAM(0), LPARAM(0));
+                }
             }
+            LRESULT(1)
         }
     }
-    LRESULT(1)
+}
+
+/// What the hook should do with a keyboard event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookDecision {
+    /// Forward the event to the next hook.
+    Pass,
+    /// Swallow the event (auto-repeat of a swallowed keydown, or the keyup of
+    /// one).
+    Swallow,
+    /// Swallow and post the trigger — the arming keydown of the chord.
+    SwallowAndFire,
+}
+
+/// Decides what the low-level hook does with a keystroke. Pure state
+/// machine: `armed` is true while the hook is ready to fire the chord's next
+/// keydown.
+///
+/// The keyup of the chord key re-arms the hook regardless of modifier state:
+/// a rolled press (the key released before the modifier) must not leave the
+/// hook disarmed, or the next chord press would be swallowed without firing —
+/// indistinguishable from a broken hotkey.
+fn decide_hook(armed: &mut bool, vk_is_chord: bool, is_up: bool, mods_match: bool) -> HookDecision {
+    if !vk_is_chord {
+        return HookDecision::Pass;
+    }
+    if is_up {
+        *armed = true;
+        // Swallow the keyup only when the modifiers still match — a matching
+        // keyup always corresponds to a keydown we swallowed, and the target
+        // app must not see a stray keyup. A mismatched keyup passes through;
+        // re-arming is what matters.
+        return if mods_match { HookDecision::Swallow } else { HookDecision::Pass };
+    }
+    if !mods_match {
+        return HookDecision::Pass;
+    }
+    if std::mem::take(armed) {
+        HookDecision::SwallowAndFire
+    } else {
+        // Auto-repeat of a chord keydown that already fired.
+        HookDecision::Swallow
+    }
 }
 
 /// Current modifier state must equal the chord's modifiers exactly, so
@@ -164,6 +208,74 @@ fn mods_match(shared: &Shared) -> bool {
         && alt == shared.alt.load(Ordering::Relaxed)
         && shift == shared.shift.load(Ordering::Relaxed)
         && win == shared.win.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pass(armed: &mut bool) -> HookDecision {
+        decide_hook(armed, false, false, true)
+    }
+
+    #[test]
+    fn non_chord_keys_always_pass() {
+        let mut armed = true;
+        assert_eq!(pass(&mut armed), HookDecision::Pass);
+        assert!(armed, "non-chord keys must not touch the armed state");
+        assert_eq!(decide_hook(&mut armed, false, true, true), HookDecision::Pass);
+        assert!(armed);
+    }
+
+    #[test]
+    fn arming_keydown_fires_once() {
+        let mut armed = true;
+        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::SwallowAndFire);
+        assert!(!armed);
+        // Auto-repeat while the key is held: swallowed, never fires again.
+        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::Swallow);
+        assert!(!armed);
+    }
+
+    #[test]
+    fn mismatched_modifiers_pass_through() {
+        let mut armed = true;
+        assert_eq!(decide_hook(&mut armed, true, false, false), HookDecision::Pass);
+        assert!(armed, "a passed-through keydown must not disarm the hook");
+    }
+
+    #[test]
+    fn matching_keyup_swallows_and_rearms() {
+        let mut armed = false;
+        assert_eq!(decide_hook(&mut armed, true, true, true), HookDecision::Swallow);
+        assert!(armed, "a keyup must re-arm the hook");
+    }
+
+    #[test]
+    fn rolled_press_keyup_rearms_despite_mismatched_modifiers() {
+        // The failure mode: Alt+V where the user releases Alt before V. The
+        // V keyup arrives with the modifiers no longer matching, and the hook
+        // must still re-arm — otherwise the next Alt+V is swallowed silently.
+        let mut armed = false;
+        assert_eq!(decide_hook(&mut armed, true, true, false), HookDecision::Pass);
+        assert!(armed, "the rolled-press keyup must re-arm the hook");
+    }
+
+    #[test]
+    fn full_press_cycle() {
+        let mut armed = true;
+        // Alt+V, normal release order: fire, swallow repeat, swallow keyup, re-arm.
+        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::SwallowAndFire);
+        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::Swallow);
+        assert_eq!(decide_hook(&mut armed, true, true, true), HookDecision::Swallow);
+        assert!(armed);
+        // Rolled release order: fire, keyup with mismatched mods still re-arms.
+        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::SwallowAndFire);
+        assert!(!armed);
+        assert_eq!(decide_hook(&mut armed, true, true, false), HookDecision::Pass);
+        assert!(armed, "the next press must fire again");
+        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::SwallowAndFire);
+    }
 }
 
 fn call_next(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

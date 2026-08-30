@@ -317,11 +317,39 @@ fn key_name(vk: u32) -> String {
     name.to_string()
 }
 
+/// The chord currently in effect, as far as the hotkey machinery knows.
+/// The paste path uses it to release the chord's modifiers before injecting
+/// Ctrl+V, because the user may still be physically holding Alt (or Win) from
+/// the chord that opened the popup.
+pub fn active_chord() -> Chord {
+    MANAGER
+        .get()
+        .map(|shared| shared.current_binding().0)
+        .unwrap_or(Chord { ctrl: false, alt: false, shift: false, win: false, vk: 0 })
+}
+
 /// Holds whichever registration path is active. Dropping it unregisters.
 pub struct HotkeyManager {
     shared: Arc<Shared>,
     window_thread: Option<JoinHandle<()>>,
     hook_thread: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Shared {
+    /// The chord + path currently in effect, used to roll back to the
+    /// previous binding when a rebind fails.
+    fn current_binding(&self) -> (Chord, bool) {
+        (
+            Chord {
+                ctrl: self.ctrl.load(Ordering::SeqCst),
+                alt: self.alt.load(Ordering::SeqCst),
+                shift: self.shift.load(Ordering::SeqCst),
+                win: self.win.load(Ordering::SeqCst),
+                vk: self.vk.load(Ordering::SeqCst),
+            },
+            self.aggressive.load(Ordering::SeqCst),
+        )
+    }
 }
 
 impl HotkeyManager {
@@ -360,61 +388,101 @@ impl HotkeyManager {
 
     /// Swaps the binding at runtime, as the settings window does. `aggressive`
     /// selects the low-level hook path.
+    ///
+    /// Fail-closed: if the new binding cannot be registered (the chord is
+    /// refused, the hook cannot be installed), the previous binding is put
+    /// back in place and an `Err` is returned. The runtime then never sits in
+    /// the worst state — a dead hotkey — and the caller can surface the error
+    /// to the user.
     pub fn rebind(&self, chord: &Chord, aggressive: bool) -> AppResult<()> {
         let shared = &self.shared;
         // Serialize concurrent rebinds; also guards the hook lifecycle (spawn
         // and join) against double-install races.
         let mut hook_guard = self.hook_thread.lock();
 
-        // Leaving aggressive mode: stop the hook first, so the chord is never
-        // swallowed by the hook while RegisterHotKey is also active (which
-        // would fire the trigger twice).
-        if !aggressive {
-            if let Some(thread) = hook_guard.take() {
-                llhook::request_stop(shared);
-                let _ = thread.join();
+        let previous = shared.current_binding();
+
+        match apply_new(shared, chord, aggressive, &mut hook_guard) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    "rebind to {} (aggressive: {aggressive}) failed: {e}; restoring the previous binding",
+                    chord.to_display()
+                );
+                // Tear down whatever the failed attempt left running, then
+                // re-apply the previous binding from scratch.
+                if let Some(thread) = hook_guard.take() {
+                    llhook::request_stop(shared);
+                    let _ = thread.join();
+                }
+                if let Err(restore_err) =
+                    apply_new(shared, &previous.0, previous.1, &mut hook_guard)
+                {
+                    tracing::error!(
+                        "could not restore the previous hotkey binding either: {restore_err}"
+                    );
+                }
+                Err(e)
             }
         }
+    }
+}
 
-        shared.store_chord(chord);
-        shared.hook_armed.store(true, Ordering::SeqCst);
-        shared.aggressive.store(aggressive, Ordering::SeqCst);
+/// Applies one binding: swaps `RegisterHotKey` and/or the hook to match.
+/// Returns an error when the binding could not be put in effect; the caller
+/// decides what to do about the state left behind.
+fn apply_new(
+    shared: &Arc<Shared>,
+    chord: &Chord,
+    aggressive: bool,
+    hook_guard: &mut Option<JoinHandle<()>>,
+) -> AppResult<()> {
+    let hwnd = HWND(shared.hwnd.load(Ordering::SeqCst) as *mut c_void);
+    if hwnd.is_invalid() {
+        return Err(AppError::Other("hotkey window missing".into()));
+    }
+    // Leaving aggressive mode: stop the hook first, so the chord is never
+    // swallowed by the hook while RegisterHotKey is also active (which
+    // would fire the trigger twice).
+    if !aggressive {
+        if let Some(thread) = hook_guard.take() {
+            llhook::request_stop(shared);
+            let _ = thread.join();
+        }
+    }
 
-        let hwnd = HWND(shared.hwnd.load(Ordering::SeqCst) as *mut c_void);
-        if hwnd.is_invalid() {
-            return Err(AppError::Other("hotkey window missing".into()));
-        }
-        // Synchronous: the window thread re-registers before we return.
-        // FFI: hwnd is the live hidden window; wparam/lparam are plain words.
-        unsafe {
-            SendMessageW(hwnd, WM_APP_REBIND, Some(WPARAM(usize::from(aggressive))), None);
-        }
+    shared.store_chord(chord);
+    shared.hook_armed.store(true, Ordering::SeqCst);
+    shared.aggressive.store(aggressive, Ordering::SeqCst);
 
-        if aggressive && shared.hook.load(Ordering::SeqCst) == 0 {
-            let (tx, rx) = mpsc::channel();
-            let handle = llhook::install(shared.clone(), tx)
-                .map_err(|e| AppError::Other(format!("cannot spawn hook thread: {e}")))?;
-            *hook_guard = Some(handle);
-            match rx.recv_timeout(Duration::from_millis(2000)) {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    // Degrade to the standard path and report; better a
-                    // working non-reserved chord than a dead hotkey.
-                    tracing::warn!("low-level keyboard hook failed, falling back: {e}");
-                    shared.aggressive.store(false, Ordering::SeqCst);
-                    // FFI: same valid hwnd as above; rolls registration back.
-                    unsafe {
-                        SendMessageW(hwnd, WM_APP_REBIND, Some(WPARAM(0)), None);
-                    }
-                    return Err(AppError::Other(format!(
-                        "low-level keyboard hook could not be installed: {e}"
-                    )));
-                }
-                Err(_) => {
-                    return Err(AppError::Other("low-level keyboard hook did not start".into()));
-                }
-            }
+    // Synchronous: the window thread re-registers before we return, and its
+    // reply says whether the chord was actually accepted.
+    // FFI: hwnd is the live hidden window; wparam/lparam are plain words.
+    let registered = unsafe {
+        SendMessageW(hwnd, WM_APP_REBIND, Some(WPARAM(usize::from(aggressive))), None)
+    };
+    if !aggressive && registered.0 == 0 {
+        return Err(AppError::Other(
+            "RegisterHotKey refused this combination (the settings UI explains reserved chords)"
+                .into(),
+        ));
+    }
+
+    if aggressive && shared.hook.load(Ordering::SeqCst) == 0 {
+        let (tx, rx) = mpsc::channel();
+        let handle = llhook::install(shared.clone(), tx)
+            .map_err(|e| AppError::Other(format!("cannot spawn hook thread: {e}")))?;
+        *hook_guard = Some(handle);
+        match rx.recv_timeout(Duration::from_millis(2000)) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(AppError::Other(format!(
+                "low-level keyboard hook could not be installed: {e}"
+            ))),
+            Err(_) => Err(AppError::Other(
+                "low-level keyboard hook did not start".into(),
+            )),
         }
+    } else {
         Ok(())
     }
 }
@@ -547,8 +615,10 @@ unsafe extern "system" fn hotkey_wnd_proc(
         }
         WM_APP_REBIND => {
             if let Some(shared) = MANAGER.get() {
-                // wparam != 0 selects the aggressive (hook) path.
-                apply_registration(shared, wparam.0 != 0);
+                // wparam != 0 selects the aggressive (hook) path; the return
+                // value tells `rebind` whether the request was fulfilled.
+                let ok = apply_registration(shared, wparam.0 != 0);
+                return LRESULT(usize::from(ok) as isize);
             }
             LRESULT(0)
         }
@@ -557,22 +627,25 @@ unsafe extern "system" fn hotkey_wnd_proc(
 }
 
 /// Runs on the window thread: swaps `RegisterHotKey` on or off to match the
-/// currently selected path. A no-op chord (vk 0, before the first `rebind`)
-/// registers nothing.
-fn apply_registration(shared: &Shared, aggressive: bool) {
+/// currently selected path. Returns whether the request was fulfilled: the
+/// standard path reports whether `RegisterHotKey` accepted the chord, the
+/// aggressive path always reports success (the hook install itself is
+/// checked by the caller). A no-op chord (vk 0, before the first `rebind`)
+/// registers nothing and counts as success.
+fn apply_registration(shared: &Shared, aggressive: bool) -> bool {
     let hwnd = HWND(shared.hwnd.load(Ordering::SeqCst) as *mut c_void);
     if hwnd.is_invalid() {
-        return;
+        return false;
     }
     // FFI: hwnd is the live hidden window; mods/vk come from our own atomics.
     unsafe {
         let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
         if aggressive {
-            return;
+            return true;
         }
         let vk = shared.vk.load(Ordering::SeqCst);
         if vk == 0 {
-            return;
+            return true;
         }
         let mut mods = HOT_KEY_MODIFIERS(0);
         if shared.ctrl.load(Ordering::SeqCst) {
@@ -589,12 +662,13 @@ fn apply_registration(shared: &Shared, aggressive: bool) {
         }
         // MOD_NOREPEAT so a held key never re-fires the popup.
         match RegisterHotKey(Some(hwnd), HOTKEY_ID, mods | MOD_NOREPEAT, vk) {
-            Ok(()) => {}
+            Ok(()) => true,
             Err(e) => {
                 tracing::warn!(
                     "RegisterHotKey refused ({}); the settings UI explains reserved chords",
                     e
                 );
+                false
             }
         }
     }

@@ -42,8 +42,11 @@ pub fn search_items(
 #[tauri::command]
 pub fn get_item_blob_url(state: State<'_, AppState>, id: i64) -> AppResult<String> {
     let path = state.store.blob_path(id)?;
+    // Windows serves Tauri's custom protocols over http://<scheme>.localhost,
+    // not scheme://localhost — the CSP in tauri.conf.json lists both forms for
+    // exactly this reason, and the asset:// spelling silently fails to load.
     Ok(format!(
-        "asset://localhost/{}",
+        "http://asset.localhost/{}",
         urlencoding::encode(&path.to_string_lossy())
     ))
 }
@@ -166,17 +169,42 @@ pub fn update_settings(
     patch: serde_json::Value,
 ) -> AppResult<Settings> {
     let before = state.settings.get();
+
+    // Validate the chord BEFORE anything is persisted. Saving first and
+    // validating after leaves settings.json and the settings UI showing a
+    // binding the runtime is not actually using, which is worse than a
+    // rejected change: the user sees their new hotkey and it does nothing.
+    let proposed_chord = match patch.get("hotkey").and_then(|h| h.get("binding")).and_then(|b| b.as_str()) {
+        Some(binding) if binding != before.hotkey.binding => {
+            Some(crate::hotkey::Chord::parse(binding)?)
+        }
+        _ => None,
+    };
+
     let next = state.settings.patch(patch)?;
 
     // Settings that own live OS state have to be pushed at whatever holds it;
     // saving the file changes nothing on its own.
-    if next.hotkey.binding != before.hotkey.binding
-        || next.hotkey.aggressive_mode != before.hotkey.aggressive_mode
-    {
-        // A rejected chord must not lose the rest of the patch, which is
-        // already saved — report it and leave the previous binding registered.
-        let chord = crate::hotkey::Chord::parse(&next.hotkey.binding)?;
-        state.hotkeys.rebind(&chord, next.hotkey.aggressive_mode)?;
+    if proposed_chord.is_some() || next.hotkey.aggressive_mode != before.hotkey.aggressive_mode {
+        let chord = match proposed_chord {
+            Some(c) => c,
+            None => crate::hotkey::Chord::parse(&next.hotkey.binding)?,
+        };
+        if let Err(e) = state.hotkeys.rebind(&chord, next.hotkey.aggressive_mode) {
+            // The registration failed and the manager kept the old chord, so
+            // roll the file back to match the runtime rather than letting the
+            // two disagree. The rest of the patch stays applied: one refused
+            // hotkey should not discard the user's other changes.
+            let rollback = serde_json::json!({
+                "hotkey": {
+                    "binding": before.hotkey.binding,
+                    "aggressiveMode": before.hotkey.aggressive_mode,
+                }
+            });
+            let reverted = state.settings.patch(rollback)?;
+            let _ = app.emit(events::SETTINGS_CHANGED, &reverted);
+            return Err(e);
+        }
     }
 
     if next.storage.retention_days != before.storage.retention_days

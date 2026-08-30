@@ -43,15 +43,22 @@ Write-Host ("elapsed at last poll: {0} ms" -f $elapsed)
 
 $logFile = Get-ChildItem $log -Filter 'rebuffer.log.*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($logFile) {
-    $lines = Get-Content $logFile.FullName -Tail 40
-    $startLine = $lines | Where-Object { $_ -match 'rebuffer starting' } | Select-Object -Last 1
-    $hotkeyLine = $lines | Where-Object { $_ -match 'hotkey .* registered' } | Select-Object -Last 1
+    $t0Utc = [DateTime]::UtcNow.AddMilliseconds(-$sw.ElapsedMilliseconds)
+    $startLine = $null; $hotkeyLine = $null
+    for ($try = 0; $try -lt 5 -and -not $hotkeyLine; $try++) {
+        Start-Sleep -Milliseconds 400
+        $lines = Get-Content $logFile.FullName -Tail 40
+        $cand = $lines | Where-Object { [DateTimeOffset]::Parse([regex]::Match($_, '^\S+').Value).UtcDateTime -ge $t0Utc }
+        $startLine = $cand | Where-Object { $_ -match 'rebuffer starting' } | Select-Object -Last 1
+        $hotkeyLine = $cand | Where-Object { $_ -match 'hotkey .* registered' } | Select-Object -Last 1
+    }
     if ($startLine -and $hotkeyLine) {
-        $tStart = [DateTimeOffset]::Parse($startLine.Substring(0, 30).Trim()).ToUnixTimeMilliseconds()
-        $tHot = [DateTimeOffset]::Parse($hotkeyLine.Substring(0, 30).Trim()).ToUnixTimeMilliseconds()
-        $t0Ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $sw.ElapsedMilliseconds
-        Write-Host ("log 'rebuffer starting'        : {0} ms after spawn" -f ($tStart - $t0Ms))
-        Write-Host ("log 'hotkey registered'        : {0} ms after spawn (tray install follows)" -f ($tHot - $t0Ms))
-        Write-Host ("'starting' -> 'hotkey reg'     : {0} ms" -f ($tHot - $tStart))
+        $tsStart = [DateTimeOffset]::Parse([regex]::Match($startLine, '^\S+').Value).UtcDateTime
+        $tsHot = [DateTimeOffset]::Parse([regex]::Match($hotkeyLine, '^\S+').Value).UtcDateTime
+        Write-Host ("log 'rebuffer starting'  : {0} ms after spawn" -f ($tsStart - $t0Utc).TotalMilliseconds)
+        Write-Host ("log 'hotkey registered'  : {0} ms after spawn (tray install follows immediately)" -f ($tsHot - $t0Utc).TotalMilliseconds)
+        Write-Host ("'starting' -> 'hotkey'   : {0} ms" -f ($tsHot - $tsStart).TotalMilliseconds)
+    } else {
+        Write-Host "log lines for this launch not found (log may be from an earlier launch)"
     }
 }

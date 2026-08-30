@@ -75,5 +75,5 @@ foreach ($p in $parts) {
   }
 }
 if ($vk -eq 0) { throw "no key in chord" }
-[Keys]::Tap([ushort]$vk, $mods)
+[Keys]::Tap([System.UInt16]$vk, $mods)
 Write-Output "sent $Chord"

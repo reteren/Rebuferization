@@ -124,8 +124,11 @@ pub fn map_rows_to_items(
 
             let thumb_url = r.thumb_path.map(|t| {
                 let abs_thumb = root.join("blobs").join("thumbs").join(t);
+                // Windows serves Tauri's custom protocols over
+                // http://<scheme>.localhost; the asset:// spelling loads
+                // nothing and renders as a broken image.
                 format!(
-                    "asset://localhost/{}",
+                    "http://asset.localhost/{}",
                     urlencoding::encode(&abs_thumb.to_string_lossy())
                 )
             });

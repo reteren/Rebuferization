@@ -24,8 +24,7 @@ using System.Diagnostics;
 public static class HotkeyProbe {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern uint SendInput(uint nInputs, INPUT[] inputs, int cbSize);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out long value, int size);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -45,11 +44,7 @@ public static class HotkeyProbe {
     const int DWMWA_LAST_PRESENT_TIME = 12;
 
     static void SendKey(ushort vk, bool up) {
-        INPUT[] inp = new INPUT[1];
-        inp[0].type = INPUT_KEYBOARD;
-        inp[0].U.ki.wVk = vk;
-        if (up) inp[0].U.ki.dwFlags = KEYEVENTF_KEYUP;
-        SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+        keybd_event((byte)vk, 0, up ? KEYEVENTF_KEYUP : 0u, UIntPtr.Zero);
     }
 
     public static void SendAltV() {

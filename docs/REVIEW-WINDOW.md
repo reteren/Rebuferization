@@ -196,16 +196,20 @@ work area gets x = -32; on a 150% monitor with a small physical work area
 it can be worse. SPEC 5.1's "never above workArea.left/top" applies only to
 the popup; the settings window is the same codebase's other half.
 
-### 10. `show_popup` toggles, which contradicts SPEC §8 (and can race)
+### 10. `show_popup` toggles — the SPEC reference is what is wrong, not the code (and the check can race)
 
 `window/mod.rs:30-34`. The tray's left-click and the single-instance plugin
 both route through `show_popup`, which closes the popup when it is already
-visible — SPEC §8 says left-click "opens the popup at the cursor" and the
-single-instance plugin's job is to surface the existing instance, not hide
-it. Separately, `show_popup` runs on both the hotkey window thread and the
-main thread (tray, second instance); the `is_visible` check is racy, so a
-tray click while a hotkey show is in flight can hide the popup the hotkey
-just showed.
+visible. **Correction to the review itself:** the toggle is the intended
+behavior — pressing the hotkey again to dismiss is what Win+V does and what
+users expect — so SPEC §8's "left-click opens the popup at the cursor"
+should be read (or amended) as "toggles the popup", and the single-instance
+plugin "surfaces the existing instance" by either opening or closing it,
+which is fine. The genuine defect is narrower: `show_popup` runs on both
+the hotkey window thread and the main thread (tray, second instance), and
+the `is_visible` check is racy, so a tray click while a hotkey show is in
+flight can hide the popup the hotkey just showed (or two shows can race
+each other).
 
 ---
 
@@ -232,3 +236,136 @@ just showed.
   guard-before-owner drops found in this scope.
 - **Paste timing:** 40 ms settle is inside SPEC's 30–50 ms window, and the
   delay correctly sits after the restore.
+
+---
+
+## Resolution (W20)
+
+All fixes below are confined to `src-tauri/src/window/**` and
+`src-tauri/src/hotkey/**` plus this document; no other source was touched.
+
+### 1. Paste into an unverified target — FIXED
+
+`window/paste.rs` (`send_paste`): after the 40 ms settle the injection is
+gated on `IsWindow(hwnd)` and `GetForegroundWindow() == hwnd`; either
+failing logs at `warn` and skips the injection entirely — the clipboard
+write has already succeeded, so the user pastes by hand. The cache is also
+guarded at capture time (`window/mod.rs:53-62`): a foreground HWND that is
+our own popup or settings window clears the cache instead of being stored,
+which covers the show/hide race where the cache could have been our own
+window. Testable parts: the gating is FFI against live windows, so it is
+**not unit-tested**; the cache-guard is exercised only by code review.
+
+### 2. Dismissal steals focus — FIXED
+
+`window/mod.rs`: `hide_popup(&app)` keeps its signature and restore
+behavior (command paths: Esc, close-on-copy, paste — we are the reason
+focus left). A new `hide_popup_dismissed(&app)` hides without restoring and
+is used by the outside-click handler (`Focused(false)`), where the window
+the user clicked already has focus. **No commands.rs call-site change is
+needed** — `paste_to_previous_window` and `commands::hide_popup` both keep
+calling `hide_popup`, which is exactly the restore-intent they want.
+Not unit-testable (window events), exercised by review only.
+
+### 3. Rolled press swallowed by the hook — FIXED and TESTED
+
+`hotkey/llhook.rs`: the decision was extracted into a pure state machine
+`decide_hook(armed, vk_is_chord, is_up, mods_match)`, and the keyup of the
+chord key now re-arms the hook **regardless of modifier state** (a matching
+keyup is still swallowed; a mismatched one passes through — re-arming is
+what matters). Six unit tests cover the normal press, auto-repeat, rolled
+release, and full cycles (`llhook.rs::tests`).
+
+### 4. Fixed-size overflow — FIXED and TESTED
+
+`window/position.rs`: new pure helpers `clamp_size_to_work` and
+`clamp_pos_to_work`; the size is clamped to the work area before the
+position is clamped, so the right/bottom-then-left/top order can no longer
+push the excess past the right edge. Five unit tests cover oversized fixed
+windows, negative-coordinate monitors, the bottom-right cursor, and a
+left-edge taskbar (`position.rs::tests`). The DPI-scaling of fixed sizes is
+unchanged and was already correct.
+
+### 5. UIPI guard is dead code — FIXED (pending one coordinator change)
+
+`window/paste.rs`: the `sent == 0` check cannot detect UIPI (SendInput
+reports success even when the elevated target filters the input), so
+`send_paste` now compares the target process's mandatory integrity level
+with ours (`OpenProcess` + `OpenProcessToken` + `GetTokenInformation`
+`TokenIntegrityLevel`, last SID sub-authority) before injecting; when the
+target is more elevated it logs the SPEC-mandated `warn` and skips, and
+when the comparison cannot be made it logs that and injects anyway. The
+`sent == 0` branch stays as a catch-all for genuine SendInput failures.
+The required `Win32_Security` feature in `src-tauri/Cargo.toml` is the
+coordinator's file — asked for via `ask` (msg_f5656f10b301, currently
+pending). **Not unit-testable** without a live elevated process.
+
+### 6. Chord modifiers still down at Ctrl+V — FIXED and TESTED
+
+`window/paste.rs`: `send_paste` reads the active chord
+(`hotkey::active_chord`, new in `hotkey/mod.rs`) and checks the physical
+state of each of its modifiers with `GetAsyncKeyState` — checking, not
+assuming; only modifiers actually held are released, as key-ups, before the
+Ctrl+V sequence (order: Ctrl, Alt, Shift, Win; the Win key-up uses the
+side that is down). No key-downs are synthesized for released modifiers,
+and nothing is restored afterwards. `build_paste_events` is a pure function
+with five unit tests (`paste.rs::tests`).
+
+### 7. Failed rebind leaves a dead hotkey or a lying file — FIXED (runtime half), one coordinator change offered
+
+`hotkey/mod.rs`: `rebind` is now fail-closed — it snapshots the previous
+binding, and if the new one cannot be registered (RegisterHotKey refusal —
+now reported back through the `WM_APP_REBIND` reply — or hook install
+failure/timeout), it tears down whatever the failed attempt left running
+and re-applies the previous binding, then returns `Err`. **Chosen failure
+mode: the previous hotkey keeps working.** Rationale: a dead hotkey is the
+state this codebase already treats as the hardest failure to diagnose, and
+a working old chord plus an `Err` the UI can surface is strictly safer than
+an honest file and no hotkey. Residual: because `commands.rs::update_settings`
+patches (persists) the settings before parse/rebind, the settings file/UI
+can still show a binding the runtime refused — the fix is in the
+coordinator's file (parse before patch and/or roll the hotkey section back
+on rebind error); asked for via `ask` (msg_f5656f10b301, pending). The
+startup path in `lib.rs` is unchanged: a registration refusal still logs
+and leaves the app hotkeyless, but now `rebind` reports it as an `Err`
+instead of a log-only warn. Not unit-tested (needs real hotkey
+registration); exercised by review.
+
+### 8. Hidden window never destroyed / class never unregistered — NOT CHANGED, by design
+
+The drop path already stops the hook thread, calls `UnregisterHotKey`,
+posts `WM_QUIT`, and joins the window thread. Adding `DestroyWindow` would
+require a message round-trip to a thread that is being torn down at process
+exit for zero benefit (Windows reclaims the HWND and the class at process
+exit, and the `OnceLock` forbids ever re-creating the manager). Writing an
+honest "not worth fixing" rather than adding shutdown-ordering risk.
+
+### 9. Settings centering unclamped — FIXED and TESTED
+
+`window/position.rs`: `center_on_cursor_monitor` now clamps the rescaled
+size through the same `clamp_size_to_work` helper before centering, which
+puts the window fully inside the work area (the centering formula is
+in-bounds once the size fits). Covered by the size-clamp unit tests.
+
+### 10. Show/hide race — FIXED; toggle kept; SPEC reference corrected
+
+Toggle kept (hotkey-again-dismisses is Win+V behavior). `window/mod.rs`
+adds a static `SHOW_LOCK` held by `show_popup` across the visible-check and
+the show transition, serializing the two concurrent show paths (hotkey
+thread and main thread). The dismissal handler uses `try_lock` and gives up
+when a show is in flight — it must never block on the lock, because the
+hotkey thread holds it across `win.show()`/`set_focus()` and a main thread
+blocked on the lock instead of servicing window messages would deadlock
+(that hazard is documented on the static). The review's finding-10 text was
+corrected to say the toggle is intended and SPEC §8's wording should be
+amended, not the code. Not unit-testable (window events and cross-thread
+timing).
+
+### What could not be tested
+
+The injection path as a whole (findings 1, 2, 5, 10) needs live windows,
+an elevated process, or two monitors; those are covered by review plus the
+pure-logic tests where the logic could be extracted (hook state machine,
+clamp arithmetic, event synthesis). `cargo test` / `cargo check` results
+depend on the coordinator's answer to the pending `ask` (the
+`Win32_Security` feature); everything else compiles clean.
