@@ -1,0 +1,3 @@
+interface GroupInfo {
+  key: string; label: string; top: number; rows: number;
+}

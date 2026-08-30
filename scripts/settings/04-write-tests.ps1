@@ -166,7 +166,7 @@ Nav 'Appearance'
 Eval "(() => { const r = [...document.querySelectorAll('.content input[type=radio]')].find(x => x.parentElement.textContent.includes('Fixed size')); r.click(); return 'ok'; })()" | Out-Null
 WaitW
 Check 'window.sizeMode fixed' (SJson).window.sizeMode 'fixed'
-$fw = Eval "(() => { const i = document.querySelector('input[aria-label=\"Fixed width\"]'); i.value = '800'; i.dispatchEvent(new Event('change', {bubbles:true})); return 'set'; })()" | Out-Null
+$fw = Eval "(() => { const i = [...document.querySelectorAll('.content input')].find(x => x.getAttribute('aria-label') === 'Fixed width'); i.value = '800'; i.dispatchEvent(new Event('change', {bubbles:true})); return 'set'; })()" | Out-Null
 WaitW
 Check 'window.fixed.width 800' (SJson).window.fixed.width 800
 # A2 back to percent + percentOfMonitor
@@ -230,7 +230,7 @@ WaitW
 $bp = (SJson).privacy.blockedProcesses
 Check 'privacy.blockedProcesses +testproc.exe' ($bp -contains 'testproc.exe') $true
 # remove it
-Eval "(() => { const b = document.querySelector('button[aria-label=\"Remove testproc.exe\"]'); b.click(); return 'removed'; })()" | Out-Null
+Eval "(() => { const b = [...document.querySelectorAll('.content button')].find(x => x.getAttribute('aria-label') === 'Remove testproc.exe'); b.click(); return 'removed'; })()" | Out-Null
 WaitW
 $bp = (SJson).privacy.blockedProcesses
 Check 'privacy.blockedProcesses -testproc.exe' ($bp -contains 'testproc.exe') $false

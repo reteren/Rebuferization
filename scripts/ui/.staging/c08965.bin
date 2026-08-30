@@ -1,0 +1,4 @@
+export async function loadMore(): Promise<void> {
+  if (this.loading || !this.hasMore) return;
+  this.list = [...this.list, ...await listItems(200)];
+}

@@ -1,0 +1,2 @@
+const { grid, items } = $props();
+const visible = $derived(items.slice(0, 200));

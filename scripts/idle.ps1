@@ -9,7 +9,18 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$proc = Get-Process rebuffer -ErrorAction SilentlyContinue
+# The debug exe bootstraps a child process; Get-Process can return the
+# short-lived launcher. Resolve the real pid through the popup window instead.
+Import-Module (Join-Path $PSScriptRoot 'win.psm1')
+$proc = $null
+foreach ($cand in (Get-Process rebuffer -ErrorAction SilentlyContinue)) {
+    $hwnd = [Win32]::FindAnyWindowByTitle('Rebuffer', $cand.Id)
+    if ($hwnd -ne [IntPtr]::Zero) { $proc = $cand; break }
+}
+if (-not $proc) {
+    $cand = Get-Process rebuffer -ErrorAction SilentlyContinue | Sort-Object StartTime | Select-Object -Last 1
+    if ($cand) { $proc = $cand }
+}
 if (-not $proc) { throw 'rebuffer.exe is not running' }
 Write-Host "app pid: $($proc.Id), settling for ${SettleSeconds}s..."
 Start-Sleep -Seconds $SettleSeconds
