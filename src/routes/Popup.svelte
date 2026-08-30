@@ -3,6 +3,7 @@
   // meet W5's component kit. No component calls invoke; this file is the only
   // consumer of both sides.
 
+  import { untrack } from 'svelte'
   import { open, save } from '@tauri-apps/plugin-dialog'
 
   import ContextMenu from '../lib/components/ContextMenu.svelte'
@@ -31,6 +32,7 @@
     setPinned,
     showInFolder,
     showSettingsWindow,
+    type UnlistenFn,
   } from '../lib/ipc'
   import { items } from '../lib/stores/items.svelte'
   import { selection } from '../lib/stores/selection.svelte'
@@ -73,11 +75,10 @@
   let gridWidth = $state(0)
   let stats = $state<StorageStats | null>(null)
   let warning = $state<{ text: string; kind: 'warn' | 'report' } | null>(null)
+  let error = $state<string | null>(null)
   let contextMenu = $state<{ item: ItemDto; x: number; y: number } | null>(null)
   let renameTarget = $state<ItemDto | null>(null)
   let renameValue = $state('')
-
-  let lastToggleAt = 0
 
   const showSkeleton = $derived(items.loading && items.list.length === 0)
   const empty = $derived(!items.loading && items.list.length === 0)
@@ -92,16 +93,31 @@
   )
 
   $effect(() => {
-    void settings.init()
-    void items.load(activeTab, sort, query)
-    void refreshStats()
-    void popupReady()
+    // Runs once: untrack keeps tab/sort/query changes from re-firing this
+    // block, which would stack a new storage-warning listener per keystroke.
+    untrack(() => {
+      void settings.init()
+      void items.load(activeTab, sort, query)
+      void refreshStats()
+      void popupReady()
+    })
+    let unlisten: UnlistenFn | null = null
     void onStorageWarning((w) => {
       warning = {
         text: storageWarningText(w),
         kind: w.removedItems > 0 ? 'report' : 'warn',
       }
+      if (w.removedItems > 0) {
+        // The janitor prunes without emitting items-deleted; the banner is
+        // the only signal that the view may be stale. Refetch silently.
+        items.refreshView()
+      }
+    }).then((fn) => {
+      unlisten = fn
     })
+    return () => {
+      unlisten?.()
+    }
   })
 
   $effect(() => {
@@ -109,12 +125,18 @@
   })
 
   $effect(() => {
-    selection.syncOrder(items.list.map((i) => i.id))
-  })
-
-  $effect(() => {
+    const ids = items.list.map((i) => i.id)
+    selection.syncOrder(ids)
+    // Prune selection of ids the view no longer contains — a janitor prune,
+    // a clear_history, or a refetch after deletion. The loaded page is the
+    // only thing that can stay selected; anything else is a ghost that would
+    // ride along on the next copy or delete.
+    const alive = new Set(ids)
+    if ([...selection.ids].some((id) => !alive.has(id))) {
+      selection.ids = new Set([...selection.ids].filter((id) => alive.has(id)))
+    }
     const f = selection.focusedId
-    if (f !== null && items.list.length > 0 && !items.list.some((i) => i.id === f)) {
+    if (f !== null && items.list.length > 0 && !alive.has(f)) {
       selection.focusedId = null
     }
   })
@@ -134,8 +156,26 @@
       const next = Math.max(1, Math.min(5, zoom + dir))
       if (next !== zoom) setZoom(next)
     }
+    // Scroll events do not bubble, but they do propagate through capture, so
+    // this catches whichever descendant is the real scroller (the virtualized
+    // grid's own overflow container, which is what actually scrolls). loadMore
+    // guards against re-entry, so repeated events in the threshold zone are
+    // harmless.
+    const onScrollCapture = (e: Event): void => {
+      const scroller = e.target as HTMLElement | null
+      if (!scroller) return
+      const overflow = scroller.scrollHeight - scroller.clientHeight
+      if (overflow < 100) return
+      if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 600) {
+        void items.loadMore()
+      }
+    }
     el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
+    el.addEventListener('scroll', onScrollCapture, true)
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('scroll', onScrollCapture, true)
+    }
   })
 
   $effect(() => {
@@ -157,7 +197,7 @@
           void hidePopup()
         } else if (e.key === 'Enter') {
           e.preventDefault()
-          copyFocused()
+          copySelection()
         }
         return
       }
@@ -181,13 +221,19 @@
       }
       if (e.key === 'Enter') {
         e.preventDefault()
-        copyFocused()
+        copySelection()
         return
       }
       if (e.key.startsWith('Arrow')) {
         e.preventDefault()
         const dx = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0
         const dy = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
+        // Arrow-down at the bottom of the loaded page loads the next page so
+        // keyboard navigation never dead-ends at the page boundary.
+        if (dy > 0 && items.hasMore && selection.focusedId !== null) {
+          const idx = items.list.findIndex((i) => i.id === selection.focusedId)
+          if (idx >= items.list.length - columns) void items.loadMore()
+        }
         selection.moveFocus(dx, dy, columns)
         return
       }
@@ -273,12 +319,14 @@
   function onQuery(q: string): void {
     query = q
     selection.clear()
-    void items.load(activeTab, sort, q)
+    // applyFilter keeps the toolbar's kind/ext filter — load() would reset it
+    // to the tab preset and silently drop what the user picked.
+    void items.applyFilter(filter, sort, q)
   }
 
   function onSort(s: Sort): void {
     sort = s
-    void items.load(activeTab, sort, query)
+    void items.applyFilter(filter, sort, query)
   }
 
   async function onAdd(): Promise<void> {
@@ -286,8 +334,8 @@
     if (picked && picked.length > 0) {
       try {
         await addFiles(picked)
-      } catch {
-        // Store not ready (parallel build) — nothing to reconcile.
+      } catch (err) {
+        error = String(err)
       }
     }
   }
@@ -299,37 +347,64 @@
   // -- grid -------------------------------------------------------------------
 
   function onGridActivate(item: ItemDto): void {
-    if (Date.now() - lastToggleAt < 40) return
-    copyItem([item.id], false)
+    // Double-click is an explicit copy: the item alone, or the whole
+    // selection when the double-clicked card is part of one.
+    const ids =
+      selection.ids.size > 0 && selection.ids.has(item.id) ? [...selection.ids] : [item.id]
+    copyItem(ids)
   }
 
   function onGridToggle(item: ItemDto, mode: 'single' | 'ctrl' | 'shift'): void {
-    lastToggleAt = Date.now()
+    if (mode === 'single') {
+      // Plain click with nothing selected is the quick-copy gesture; with a
+      // selection it single-selects (and sets the shift-range anchor) so a
+      // user can pick one item without ever copying it.
+      if (selection.ids.size === 0) {
+        copyItem([item.id])
+        return
+      }
+      selection.toggle(item.id, 'single')
+      return
+    }
+    // Ctrl+click toggles, Shift+click extends the range from the anchor.
+    // Modifiers never copy: plain-text paste lives on the context menu
+    // (Copy as plain text), where it cannot be confused with range selection.
     selection.toggle(item.id, mode)
-    if (mode === 'shift') void pasteToPreviousWindow([item.id], true)
   }
 
   function onCardContextMenu(item: ItemDto, x: number, y: number): void {
     contextMenu = { item, x, y }
   }
 
-  function copyItem(ids: number[], plain: boolean): void {
-    void copyToClipboard(ids, plain).then(() => {
-      if (settings.current.behavior.closeOnCopy) void hidePopup()
+  /** The single copy path. With closeOnCopy the popup is about to vanish back
+   * into the previously focused window, so the paste-back command is used:
+   * it writes the clipboard, hides the popup, and — when behavior.autoPaste
+   * is on — injects Ctrl+V there (SPEC §5.4). With closeOnCopy off the copy
+   * must not disturb the user's window, so only the clipboard write happens.
+   * `plain` defaults to behavior.pasteAsPlainText. */
+  function copyItem(ids: number[], plain?: boolean): void {
+    const p = settings.current.behavior.closeOnCopy
+      ? pasteToPreviousWindow(ids, plain ?? settings.current.behavior.pasteAsPlainText)
+      : copyToClipboard(ids, plain ?? settings.current.behavior.pasteAsPlainText)
+    void p.catch((err) => {
+      error = String(err)
     })
   }
 
-  function copyFocused(): void {
+  function copySelection(): void {
+    if (selection.ids.size > 0) {
+      copyItem([...selection.ids])
+      return
+    }
     const id = selection.focusedId
-    if (id !== null) copyItem([id], false)
+    if (id !== null) copyItem([id])
   }
 
-  function onGridScroll(e: Event): void {
-    const el = e.target as HTMLElement | null
-    if (!el) return
-    const overflow = el.scrollHeight - el.clientHeight
-    if (overflow < 100) return
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 600) void items.loadMore()
+  /** Surfaces a rejected command in the banner instead of dropping it. */
+  function guarded(p: Promise<unknown>): void {
+    void p.catch((err) => {
+      error = String(err)
+    })
   }
 
   function onDragStart(e: DragEvent): void {
@@ -341,7 +416,7 @@
     else if (selection.focusedId !== null) ids = [selection.focusedId]
     else return
     e.preventDefault()
-    void beginDrag(ids)
+    guarded(beginDrag(ids))
   }
 
   // -- context menu / rename ---------------------------------------------------
@@ -355,32 +430,36 @@
       selection.ids.size > 0 && selection.ids.has(item.id) ? [...selection.ids] : [item.id]
     switch (action) {
       case 'copy':
-        copyItem(multi, false)
+        copyItem(multi)
         break
       case 'copyPlain':
-        void copyToClipboard(multi, true)
+        guarded(copyToClipboard(multi, true))
         break
       case 'pin':
-        void setPinned(multi, true)
+        guarded(setPinned(multi, true))
         break
       case 'unpin':
-        void setPinned(multi, false)
+        guarded(setPinned(multi, false))
         break
       case 'open':
-        void openItem(item.id)
+        guarded(openItem(item.id))
         break
       case 'openWith':
-        void openItemWith(item.id)
+        guarded(openItemWith(item.id))
         break
       case 'reveal':
-        void showInFolder(item.id)
+        guarded(showInFolder(item.id))
         break
       case 'rename':
         renameTarget = item
         renameValue = item.title ?? ''
         break
       case 'delete':
-        await deleteItems(multi)
+        try {
+          await deleteItems(multi)
+        } catch (err) {
+          error = String(err)
+        }
         selection.clear()
         break
       case 'saveAs': {
@@ -389,7 +468,13 @@
           defaultPath: suggestName(item),
           filters: [{ name: 'All files', extensions: ['*'] }],
         })
-        if (target) await saveItemAs(item.id, target)
+        if (target) {
+          try {
+            await saveItemAs(item.id, target)
+          } catch (err) {
+            error = String(err)
+          }
+        }
         break
       }
     }
@@ -409,13 +494,19 @@
     if (title === (target.title ?? '')) return
     try {
       await renameItem(target.id, title)
-    } catch {
-      // Backend not ready (parallel build).
+    } catch (err) {
+      error = String(err)
     }
   }
 </script>
 
 <div class="popup">
+  {#if error}
+    <div class="banner error" role="alert">
+      <span>{error}</span>
+      <button onclick={() => { error = null }}>Dismiss</button>
+    </div>
+  {/if}
   {#if warning}
     <div class="banner" class:report={warning.kind === 'report'} role="alert">
       <span>{warning.text}</span>
@@ -445,7 +536,6 @@
     aria-label="Clipboard items"
     bind:this={gridEl}
     bind:clientWidth={gridWidth}
-    onscroll={onGridScroll}
     ondragstart={onDragStart}
   >
     {#if showSkeleton}
@@ -585,6 +675,15 @@
 
   .banner.report {
     background: #9ece6a;
+  }
+
+  .banner.error {
+    top: 56px;
+    background: #f7768e;
+  }
+
+  .banner.error {
+    background: #f7768e;
   }
 
   .banner button {

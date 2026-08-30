@@ -89,7 +89,10 @@ async function main() {
   }
   if (cmd === 'invoke') {
     const command = rest[1]
-    const args = rest[2] ? JSON.parse(rest[2]) : {}
+    const raw = rest[2] || '{}'
+    const args = raw.startsWith('b64:')
+      ? JSON.parse(Buffer.from(raw.slice(4), 'base64').toString('utf8'))
+      : JSON.parse(raw)
     const expr = `window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}, ${JSON.stringify(args)}).then(r => JSON.stringify(r), e => 'INVOKE_ERR:' + JSON.stringify(e))`
     const out = await withTarget(id, (c) =>
       c.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }),

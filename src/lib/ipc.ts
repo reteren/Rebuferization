@@ -6,6 +6,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
+export type { UnlistenFn } from '@tauri-apps/api/event'
+
 import { EVENTS, type CleanupResult, type Facet, type Filter, type ImportMode, type ItemDto, type Settings, type SettingsPatch, type Sort, type StorageStats, type StorageWarning, type StoreProgress, type TabCounts } from './types'
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,48 @@
+=== 04 write tests start 2026-08-30T18:49:57.3073074+00:00 ===
+WRITE hotkey.binding record Alt+Shift+Z -> expected=Alt+Shift+Z actual=Alt+Shift+Z PASS
+WRITE hotkey.binding restore Alt+V -> expected=Alt+V actual=Alt+V PASS
+WRITE hotkey reserved Win+V inline msg: Win+V is WindowsтАЩ clipboard history тАФ Windows owns that chord and RegisterHotKey will refuse it. Switch on Aggressive mode to claim it anyway.
+WRITE hotkey.binding unchanged after reserved -> expected=Alt+V actual=Alt+V PASS
+WRITE hotkey bare-key warning: A bare-key hotkey fires while you type тАФ hold a modifier.
+WRITE hotkey.binding bare P recorded -> expected=P actual=P PASS
+WRITE hotkey.binding restored again -> expected=Alt+V actual=Alt+V PASS
+WRITE hotkey unusable-key inline msg: That key cannot be used as a hotkey. Use a letter, digit, or F1тАУF24.
+WRITE hotkey.aggressiveMode on -> expected=True actual=True PASS
+WRITE hotkey.aggressiveMode off -> expected=False actual=False PASS
+WRITE behavior.launchOnStartup off -> expected=False actual=False PASS
+WRITE behavior.launchOnStartup on -> expected=True actual=True PASS
+WRITE behavior.silentStart off -> expected=False actual=False PASS
+WRITE behavior.silentStart on -> expected=True actual=True PASS
+WRITE behavior.captureEnabled off -> expected=False actual=False PASS
+WRITE behavior.captureEnabled on -> expected=True actual=True PASS
+WRITE behavior.autoPaste on -> expected=True actual=True PASS
+WRITE behavior.autoPaste off -> expected=False actual=False PASS
+WRITE behavior.pasteAsPlainText on -> expected=True actual=True PASS
+WRITE behavior.pasteAsPlainText off -> expected=False actual=False PASS
+WRITE behavior.closeOnCopy off -> expected=False actual=False PASS
+WRITE behavior.closeOnCopy on -> expected=True actual=True PASS
+WRITE storage.retentionDays 7 -> expected=7 actual=7 PASS
+WRITE storage.maxItemBytes 32MB -> expected=33554432 actual=33554432 PASS
+WRITE storage.maxStoreBytes 64MB -> expected=67108864 actual=67108864 PASS
+WRITE storage.notifyWhenFull off -> expected=False actual=False PASS
+WRITE storage.notifyWhenFull on -> expected=True actual=True PASS
+WRITE window.sizeMode fixed -> expected=fixed actual=fixed PASS
+WRITE window.fixed.width 800 -> expected=800 actual=800 PASS
+WRITE window.sizeMode percent -> expected=percent actual=percent PASS
+WRITE window.percentOfMonitor 60 -> expected=60 actual=60 PASS
+WRITE window.zoomStep 4 -> expected=4 actual=4 PASS
+WRITE appearance.showAge off -> expected=False actual=False PASS
+WRITE appearance.showAge on -> expected=True actual=True PASS
+WRITE appearance.formatLabelSize large -> expected=large actual=large PASS
+WRITE appearance.formatLabelSize medium -> expected=medium actual=medium PASS
+WRITE appearance.animateGifs off -> expected=False actual=False PASS
+WRITE appearance.animateGifs on -> expected=True actual=True PASS
+WRITE appearance.reduceMotion on -> expected=True actual=True PASS
+WRITE appearance.reduceMotion off -> expected=False actual=False PASS
+WRITE appearance.accent #ff00ff -> expected=#ff00ff actual=#ff00ff PASS
+WRITE appearance.accent restored -> expected=#7aa2ff actual=#7aa2ff PASS
+WRITE privacy.respectClipboardFlags off -> expected=False actual=False PASS
+WRITE privacy.respectClipboardFlags on -> expected=True actual=True PASS
+WRITE privacy.blockedProcesses +testproc.exe -> expected=True actual=True PASS
+WRITE privacy.blockedProcesses -testproc.exe -> expected=False actual=False PASS
+=== 04 write tests done ===

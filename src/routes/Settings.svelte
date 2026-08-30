@@ -86,9 +86,21 @@
   $effect(() => {
     void settings.init()
     void refreshStats()
+    let unlisten: (() => void) | null = null
     void onStoreProgress((p) => {
+      if (p.phase === 'completed') {
+        // The banner is for an operation in progress; a permanent "completed"
+        // strip would sit over the UI for the life of the window.
+        progress = null
+        return
+      }
       progress = p
+    }).then((fn) => {
+      unlisten = fn
     })
+    return () => {
+      unlisten?.()
+    }
   })
 
   $effect(() => {

@@ -1,0 +1,18 @@
+=== 05b reverify start 2026-08-30T19:00:24.7835756+00:00 ===
+05b R1 set retention 30 via UI: set -> file=30
+05b R1 item id=10006
+05b R1 janitor (policy) result: {"removedItems":1,"freedBytes":20}
+05b R1 aged item still present: 0 (want 0)
+05b R1 retention policy reached the janitor PASS
+05b R2 cleanDays 30: set
+05b R2 clean now click: clicked
+05b R2 feedback: Removed 1 items ┬╖ freed 20 B.
+05b R2 clean-now item still present: 0 (want 0)
+05b R2 Clean now button deletes PASS
+05b R3 set maxStoreBytes 1MB: set -> file=1048576
+05b R3 2MB item row: 10003|9618f2a01d714041fbaad673719f66f57ee2430b58411e7f929ab3f535844040
+05b R3 janitor (with cap) result: {"removedItems":1946,"freedBytes":2541576}
+05b R3 big item still present: 0 (want 0)
+05b R3 maxStoreBytes reached the janitor PASS
+05b R3 maxStoreBytes restored: 
+=== 05b done ===

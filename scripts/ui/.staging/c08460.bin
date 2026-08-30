@@ -1,3 +1,0 @@
-fn materialize(paths: &[PathBuf]) -> AppResult<Vec<PathBuf>> {
-    paths.iter().map(|p| resolve(p)).collect()
-}

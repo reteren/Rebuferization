@@ -1,2 +1,2 @@
-{"id":"081FC78ABDD5E30A09E908142FC28D12","title":"Rebuffer тАФ Settings","url":"http://localhost:1420/settings.html","type":"page"}
-{"id":"9302133628F801F94EE402C5BE0D1586","title":"Rebuffer","url":"http://localhost:1420/","type":"page"}
+{"id":"52E1132AC5DC6B6B508F6739AE3CD740","title":"about:blank","url":"http://localhost:1420/settings.html","type":"page"}
+{"id":"C43E2C3316D2EF95C741FBFBF15B3DF6","title":"Rebuffer","url":"http://localhost:1420/","type":"page"}

@@ -16,6 +16,10 @@ $sid = $s.id
 function Eval($expr) { (& node "$PSScriptRoot\cdp.mjs" eval $sid $expr) -join "`n" }
 function J($line) { $line | Tee-Object -FilePath $journal -Append }
 function DB($q) { & sqlite3 "$root\rebuffer.db" $q }
+function InvokeB64($cmd, $json) {
+  $b64 = 'b64:' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+  (& node "$PSScriptRoot\cdp.mjs" invoke $sid $cmd $b64) -join "`n"
+}
 
 J "=== 07 export/import start $(Get-Date -Format o) ==="
 
@@ -25,7 +29,7 @@ J "rows before: $countBefore"
 
 # ---- Export ----
 Remove-Item $archive -ErrorAction SilentlyContinue
-$r = & node "$PSScriptRoot\cdp.mjs" invoke $sid 'export_data' ("{`"path`":`"$($archive.Replace('\','/'))`"}")
+$r = InvokeB64 'export_data' ("{`"path`":`"$($archive.Replace('\','/'))`"}")
 J "export invoke: $r"
 Start-Sleep -Seconds 1
 if (-not (Test-Path $archive)) { J 'EXPORT archive not produced FAIL'; exit 1 }
@@ -50,7 +54,7 @@ if ($manifest.itemCount -eq $lineCount -and [int]$manifest.itemCount -eq [int]$c
 } else { J 'EXPORT manifest/items consistent FAIL' }
 
 # ---- Import merge: everything already present -> skip hashes, bump copy_count ----
-$r2 = & node "$PSScriptRoot\cdp.mjs" invoke $sid 'import_data' ("{`"path`":`"$($archive.Replace('\','/'))`",`"mode`":`"merge`"}")
+$r2 = InvokeB64 'import_data' ("{`"path`":`"$($archive.Replace('\','/'))`",`"mode`":`"merge`"}")
 J "import merge invoke: $r2"
 Start-Sleep -Seconds 1
 $countAfter = DB "SELECT COUNT(*) FROM items"
@@ -64,7 +68,7 @@ for ($i = 0; $i -lt [Math]::Min(6, $ccb.Count); $i++) {
 }
 
 # ---- Import replace: wipe + re-import ----
-$r3 = & node "$PSScriptRoot\cdp.mjs" invoke $sid 'import_data' ("{`"path`":`"$($archive.Replace('\','/'))`",`"mode`":`"replace`"}")
+$r3 = InvokeB64 'import_data' ("{`"path`":`"$($archive.Replace('\','/'))`",`"mode`":`"replace`"}")
 J "import replace invoke: $r3"
 Start-Sleep -Seconds 1
 $countReplace = DB "SELECT COUNT(*) FROM items"

@@ -57,6 +57,7 @@ class SettingsStore {
   current = $state<Settings>(DEFAULT_SETTINGS)
 
   private loading: Promise<void> | null = null
+  private unlisten: (() => void) | null = null
 
   /** Loads once; safe to call from both windows. */
   init(): Promise<void> {
@@ -83,7 +84,8 @@ class SettingsStore {
     } catch {
       // Backend not reachable (parallel build); defaults stand in.
     }
-    await onSettingsChanged((next) => {
+    this.unlisten?.()
+    this.unlisten = await onSettingsChanged((next) => {
       this.current = next
     })
   }

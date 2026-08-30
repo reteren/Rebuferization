@@ -1,1 +1,0 @@
-SELECT id, kind, preview_text FROM items WHERE kind = ?1 ORDER BY created_at DESC LIMIT 200;

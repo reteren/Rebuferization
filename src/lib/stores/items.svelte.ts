@@ -47,8 +47,10 @@ class ItemsStore {
   private running = false
   private rerun = false
   private loadingMore = false
+  private refreshing = false
   private waiters: Array<{ resolve: () => void; reject: (e: unknown) => void }> = []
   private buffered: BufferedEvent[] = []
+  private unlisteners: Array<() => void> = []
 
   /** The primary API: a tab is just a preset filter. Debounced 120 ms. */
   load(tab: TabId, sort: Sort, query: string): Promise<void> {
@@ -89,6 +91,7 @@ class ItemsStore {
       }
     } finally {
       this.loadingMore = false
+      this.flush()
     }
   }
 
@@ -139,8 +142,13 @@ class ItemsStore {
   }
 
   /** Silent refetch of the current page. The old list stays visible until the
-   * fresh one arrives, so nothing jumps. */
+   * fresh one arrives, so nothing jumps. One at a time: a second call while a
+   * refetch is in flight is dropped — the events that would have triggered it
+   * are buffered (busy() includes `refreshing`) and replayed after the fetch,
+   * where they see the fresh list. */
   private async refreshPage(): Promise<void> {
+    if (this.refreshing) return
+    this.refreshing = true
     const { filter, sort, query } = this
     try {
       const limit = Math.max(PAGE_SIZE + 1, this.list.length + PAGE_SIZE)
@@ -151,7 +159,17 @@ class ItemsStore {
       this.hasMore = raw.length > limit
     } catch {
       // Keep the current list; the next explicit load will correct it.
+    } finally {
+      this.refreshing = false
+      this.flush()
     }
+  }
+
+  /** Public hook for the storage-warning banner: a janitor prune may have
+   * removed items the current view still shows, and the prune carries no ids. */
+  refreshView(): void {
+    void this.refreshPage()
+    void this.refreshMeta()
   }
 
   private async refreshMeta(): Promise<void> {
@@ -166,7 +184,7 @@ class ItemsStore {
   // -- live events -----------------------------------------------------------
 
   private busy(): boolean {
-    return this.running || this.timer !== undefined
+    return this.running || this.timer !== undefined || this.loadingMore || this.refreshing
   }
 
   private onAdded(item: ItemDto): void {
@@ -273,9 +291,20 @@ class ItemsStore {
 
   private insertSorted(item: ItemDto): void {
     const at = this.sortedIndex(item)
-    if (at >= PAGE_SIZE) return // belongs on a later page
+    if (at >= this.list.length) {
+      // The item belongs after the loaded window. With more pages pending it
+      // will arrive via loadMore; without, the window holds the whole result
+      // set and the item belongs at the end.
+      if (this.hasMore) return
+      this.list.push(item)
+      return
+    }
+    // No truncation: dropping the page's last item here would leave loadMore
+    // (offset = list.length) fetching past it, so it would vanish from the
+    // view until a full reload. The page is allowed to grow; the offset math
+    // stays correct because every rank below the new one shifts by exactly
+    // one, and the inserted item is now part of the loaded window.
     this.list.splice(at, 0, item)
-    if (this.list.length > PAGE_SIZE) this.list.length = PAGE_SIZE
   }
 
   private resort(idx: number): void {
@@ -284,11 +313,18 @@ class ItemsStore {
     this.insertSorted(item)
   }
 
-  /** Wires the live event listeners once; idempotent per module instance. */
+  /** Wires the live event listeners once; idempotent per module instance.
+   * The unlisten handles are kept so a re-subscribe (dev HMR, a re-created
+   * window) does not stack a second set of handlers. */
   subscribe(): void {
-    void onItemAdded((item) => this.onAdded(item))
-    void onItemsUpdated((ids) => this.onUpdated(ids))
-    void onItemsDeleted((ids) => this.onDeleted(ids))
+    if (this.unlisteners.length > 0) return
+    void Promise.all([
+      onItemAdded((item) => this.onAdded(item)),
+      onItemsUpdated((ids) => this.onUpdated(ids)),
+      onItemsDeleted((ids) => this.onDeleted(ids)),
+    ]).then((fns) => {
+      this.unlisteners = fns
+    })
   }
 }
 

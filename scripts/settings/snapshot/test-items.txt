@@ -1,0 +1,12 @@
+capture-on	9983
+retention-old	9984
+cleannow	9985
+big-cap	9985
+capture-on	10001
+retention-old	10002
+cleannow	10002
+big-cap	10003
+image	10005
+r1-retention	10006
+r2-cleannow	10006
+r3-big	10003

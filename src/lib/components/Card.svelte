@@ -89,6 +89,10 @@
       ontoggle?.(item, 'shift')
       return
     }
+    ontoggle?.(item, 'single')
+  }
+
+  function handleDblClick(): void {
     onactivate?.(item)
   }
 
@@ -114,7 +118,10 @@
   role="gridcell"
   aria-selected={selected}
   tabindex="-1"
+  draggable="true"
+  data-id={item.id}
   onclick={handleClick}
+  ondblclick={handleDblClick}
   onkeydown={handleKeydown}
   oncontextmenu={handleContext}
 >

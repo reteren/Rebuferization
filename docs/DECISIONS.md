@@ -25,7 +25,9 @@ activatable window. The "focus flicker" downside is largely mitigated here:
 
 ### Hotkey → visible latency
 
-**Target:** < 80 ms. **Measured value: pending a runnable build.**
+**Target:** < 80 ms. **Measured: median 4.1 ms, worst 7.0 ms over 15 samples — PASS.** Machine: DESKTOP-0MFACBN (AMD Ryzen 7 7800X3D, 16 logical cores), Windows 11, debug build.
+
+Method (reproducible — `scripts/latency.ps1`): with the app running and the popup hidden, a C# probe records a high-resolution timestamp (`Stopwatch.GetTimestamp`), injects `Alt+V` via `keybd_event` (the same chord the physical hotkey uses; `RegisterHotKey` fires on injected input), then busy-polls `IsWindowVisible(hwnd)` on a separate thread until the flag flips. Delta = chord-sent → `WS_VISIBLE` set. The popup is toggled closed between samples with a second `Alt+V` so every sample starts from the same hidden state. 15 samples: best 2.151 ms, median 4.125 ms, mean 4.397 ms, worst 7.003 ms.
 
 The path is: LL hook callback (atomics + `PostMessage`, no allocation — order of
 microseconds) or `WM_HOTKEY` delivery → `show_popup` → `GetCursorPos` +
@@ -34,11 +36,15 @@ microseconds) or `WM_HOTKEY` delivery → `show_popup` → `GetCursorPos` +
 300–600 ms WebView2 creation cost is avoided by design (windows are created
 hidden in `tauri.conf.json`).
 
-A wall-clock number cannot be recorded yet: the app panics in `setup` until W4's
-`SettingsStore::load` lands (it is still a `todo!()`), so `cargo run` is not
-possible this phase. When it runs, measure with an `Instant::now()` in the
-hotkey callback vs. a `popup-ready` emit (or a `tracing` timestamps diff); the
-architecture keeps the budget comfortably under 80 ms.
+Two measurement caveats worth knowing:
+- The measurement includes the OS-level keyboard injection latency itself, so the app-side number is even smaller than reported; the worst sample was 7 ms.
+- Observed once: on a coldly-restarted instance the popup opened at t=1 ms and dismissed itself at t=20 ms (focus-loss dismissal racing a foreground handoff while the injection was still landing). It did not reproduce across ~25 further samples; if the user ever sees the popup "flash and vanish" right after a hotkey press, this race is the first place to look (the `Focused(false)` dismissal path in `window/mod.rs`).
+
+Also note: CDP inspection of the popup page is not possible with this config —
+wry 0.55 always calls `CoreWebView2EnvironmentOptions::set_additional_browser_arguments`,
+which per WebView2 semantics overrides the `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
+environment variable, so `--remote-debugging-port` can never be enabled without
+editing `tauri.conf.json`.
 
 ### Aggressive mode (Win+V) — known caveat
 

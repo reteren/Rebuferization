@@ -339,8 +339,146 @@ feature users will hit first.
 ## What this review could not establish
 
 Whether finding 4's inner-scroll claim holds in the built app (the flex
-resolution of `height: 100%`), the real-world frequency of findings 6-8,
-FTS rank-order stability between successive `search_items` calls (a
-re-rank between loadMore calls would reshuffle the page), and any WebView2
+resolution of `height: 100%` in this exact flex tree is not), real FTS
+rank-order stability between successive `search_items` calls (a re-rank
+between loadMore calls would reshuffle the page), and any WebView2
 scrollbar-visibility side effect of the double scroll container. All four
 are one manual run away from confirmation.
+
+---
+
+## Resolution (W28)
+
+All fixes are confined to `src/routes/Popup.svelte`,
+`src/routes/Settings.svelte`, `src/lib/stores/**`, `src/lib/ipc.ts`, and
+`src/lib/components/Card.svelte`. The one Rust-side change (the janitor
+emitting `items-deleted`) is the coordinator's, per the task brief.
+
+### 1. Shift-click pastes instead of range-selecting — FIXED, and the paste-back is re-wired where it belongs
+
+`Popup.svelte` (`onGridToggle`): modifiers never copy anymore. Ctrl+click
+toggles, Shift+click extends the range from the anchor, and plain click
+with nothing selected is the quick-copy gesture while a plain click with a
+selection single-selects (which is what makes the anchor update on the
+"last plain single click", per the selection store's contract). **Chosen
+resolution of SPEC §6.5's dual meaning:** modifier-as-selection wins inside
+the grid; plain-text paste stays on the context menu ("Copy as plain
+text"), where it cannot be confused with range selection. The auto-paste
+feature (SPEC §5.4) is restored on the primary copy path instead:
+`copyItem` now routes through `pasteToPreviousWindow` whenever
+`closeOnCopy` is on (the popup is about to hand focus back to the previous
+window anyway), so `behavior.autoPaste` fires on click / Enter /
+double-click / context-menu Copy — not just on a broken shift-click.
+Bonus wiring: `behavior.pasteAsPlainText` is now the default for
+`copyItem`, which previously ignored the setting entirely. Not
+unit-testable (gesture + window events); needs the running app.
+
+### 2. Plain click copies and closes; single selection impossible — FIXED
+
+`Card.svelte`: a plain click now emits `ontoggle(item, 'single')` (the
+contract's dead mode is alive); a double-click emits `onactivate`. The
+`lastToggleAt` guard (dead code in the old design) is gone. Selection is
+buildable with plain clicks (when a selection exists) and the keyboard
+`Enter` path copies the selection when one exists. Needs the running app
+to confirm feel.
+
+### 3. Drag-out dead — FIXED
+
+`Card.svelte`: the root carries `draggable="true"` and `data-id={item.id}`,
+matching CONTRACTS.md; no dragstart handler on the card. The single
+delegated listener stays on the grid viewport (`Popup.svelte`,
+`onDragStart`), now finds `[data-id]`, calls `preventDefault()` so the
+WebView runs no ghost drag alongside the OLE one, and passes the whole
+multi-selection when the dragged card is part of one. The Rust `begin_drag`
+path is now reachable; needs the running app to confirm the OLE drop.
+
+### 4. The 200-item cap — FIXED (list, search, and keyboard paths)
+
+`Popup.svelte`: the dead `onscroll` binding on the outer viewport is gone.
+A capture-phase scroll listener on the viewport now catches whichever
+descendant is the real scroller (scroll events do not bubble but do
+propagate through capture), with the same overflow/threshold logic as
+before and the existing `loadingMore`/`hasMore` guards against re-entry
+and end-of-list firing. Arrow-Down at the bottom of the loaded page also
+triggers `loadMore`, so keyboard navigation never dead-ends at the
+boundary. Needs the running app to confirm which container scrolls and
+that the threshold feels right.
+
+### 5. Toolbar filter discarded on sort/search — FIXED
+
+`Popup.svelte`: `onQuery` and `onSort` now call `items.applyFilter(filter,
+sort, query)` instead of `items.load(activeTab, ...)`, so the toolbar's
+kind/ext filter survives; the Toolbar's highlighted filter and the result
+set can no longer disagree.
+
+### 6. Reconciliation truncation and mid-fetch races — FIXED
+
+`stores/items.svelte.ts`: `insertSorted` no longer truncates the page to
+200. The loaded window now always represents a contiguous rank prefix, so
+offset-based `loadMore` can never skip a rank — an item pushed out of the
+page by an insert is still in the list, and one pushed past the window is
+fetched at the correct offset. `busy()` now includes `loadingMore` and the
+new `refreshing` flag, and `refreshPage`/`loadMore` replay the buffered
+events after the fetch lands — an item-added during a refetch can no
+longer be overwritten out of the view, and an items-deleted during a
+refetch can no longer be resurrected by a stale snapshot. `insertSorted`
+also appends to the end of an exhausted list (`!hasMore`) instead of
+dropping the item. Not unit-tested (no test runner is set up for the
+stores); the logic is pure enough to test if one is added.
+
+### 7. Janitor prunes leave ghost cards — FIXED (frontend half)
+
+The janitor emitting `items-deleted` is the coordinator's Rust change. On
+this side, `Popup.svelte`'s storage-warning handler now calls the new
+`items.refreshView()` (a silent page + meta refetch) whenever the warning
+carries `removedItems > 0`, so a prune reconciles the grid even without
+the event. The banner still shows the report.
+
+### 8. Selection ghosts and Ctrl+A scope — FIXED (ghosts); Ctrl+A left as SPEC's "in view"
+
+A `$effect` in `Popup.svelte` now prunes `selection.ids` (and `focusedId`)
+of ids the current list no longer contains, so a janitor prune, a
+`clear_history`, or any refetch after deletion cannot leave ghost ids that
+would ride along on the next copy or delete. Ctrl+A intentionally still
+selects the loaded page ("all in view" per SPEC §6.5); with paging fixed
+this is now a documented product call rather than a silent 200-item cap.
+
+### 9. Silent command failures in the popup — FIXED
+
+`Popup.svelte` gained an error banner (dismissable) and every mutating
+path surfaces rejections: `copyItem`, `copyPlain`, pin/unpin, open, open
+with, reveal, delete, save-as, `beginDrag`, rename (previously swallowed
+into nothing), and add-files. A failed copy — e.g. `ClipboardBusy` or a
+stale id — now tells the user why instead of doing nothing.
+
+### 10. Settings progress banner never clears — FIXED
+
+`Settings.svelte`: the `store-progress` handler clears `progress` when the
+phase is `completed`, so the banner no longer sits over the UI for the
+life of the window.
+
+### 11. Dropped unlisten handles — FIXED, including a real accumulation bug the review missed
+
+The review understated this one: `Popup.svelte`'s init `$effect` read
+`activeTab`/`sort`/`query`, so it re-ran on every tab change, sort change,
+and *keystroke in the search box*, registering a new storage-warning
+listener each time. That effect is now wrapped in `untrack` (runs once)
+with the unlisten captured and called on teardown; the same pattern in
+`Settings.svelte`; `items.svelte.ts` `subscribe()` is idempotent and keeps
+the unlisten handles; `settings.svelte.ts` unlistens before re-subscribing.
+
+### 12. Keyboard navigation stops at the page boundary — FIXED
+
+Arrow-Down while the focused item is within one row of the page bottom
+triggers `items.loadMore()` before `moveFocus`, so keyboard-only users can
+walk past 200 items. Needs the running app to confirm scroll follow.
+
+### What still needs the running app
+
+Findings 1, 2, 3, 4, 12 are gesture/layout-dependent and were fixed from
+source; `npm run check` (svelte-check) and `npx tsc --noEmit` are clean
+with zero warnings, and no `console.log` was introduced. The verification
+worker should re-test: quick-copy on empty selection, single-select via
+plain click when a selection exists, shift-range from the anchor,
+double-click copy, drag-out to Explorer, scrolling past 200 items, and the
+arrow-down page advance.

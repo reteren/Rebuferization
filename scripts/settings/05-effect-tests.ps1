@@ -17,7 +17,7 @@ $targets = & node "$PSScriptRoot\cdp.mjs" targets
 $s = ($targets | ConvertFrom-Json | Where-Object { $_.url -like '*settings.html*' } | Select-Object -First 1)
 $p = ($targets | ConvertFrom-Json | Where-Object { $_.url -notlike '*settings.html*' } | Select-Object -First 1)
 if (-not $s -or -not $p) { throw 'targets not found' }
-$sid = $s.id; $pid = $p.id
+$sid = $s.id; $pupid = $p.id
 
 function Eval($tid, $expr) { (& node "$PSScriptRoot\cdp.mjs" eval $tid $expr) -join "`n" }
 function J($line) { $line | Tee-Object -FilePath $journal -Append }
@@ -29,6 +29,12 @@ function LogTail { (Get-Content (Get-ChildItem "$root\logs\rebuffer.log.*" | Sor
 function MarkItem($id, $tag) { "$tag`t$id" | Add-Content $testItems }
 function ClickToggleCapture {
   Eval $sid "(() => { const l = [...document.querySelectorAll('label.toggle')].find(x => x.textContent.includes('Clipboard capture')); l.querySelector('input').click(); return 'ok'; })()" | Out-Null
+}
+# invoke a backend command with args passed as base64 (PowerShell->node
+# quoting mangles raw JSON braces/quotes)
+function InvokeB64($tid, $cmd, $json) {
+  $b64 = 'b64:' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+  (& node "$PSScriptRoot\cdp.mjs" invoke $tid $cmd $b64) -join "`n"
 }
 function ClickToggle($label) {
   Eval $sid "(() => { const l = [...document.querySelectorAll('label.toggle')].find(x => x.textContent.includes('$label')); if (!l) return 'NO_TOGGLE'; l.querySelector('input').click(); return 'clicked'; })()"
@@ -52,7 +58,7 @@ if ($reg -match 'Ctrl\+Alt\+Shift\+Z registered') { J 'EFFECT hotkey re-register
 Start-Sleep -Seconds 2
 $fired = LogTail | Select-String 'hotkey fired' | Select-Object -Last 1
 J "EFFECT log after real press: $fired"
-$vis = Eval $pid "document.visibilityState"
+$vis = Eval $pupid "document.visibilityState"
 J "EFFECT popup visibility after real chord: $vis"
 if ($fired -and $vis -eq 'visible') { J 'EFFECT real chord -> popup PASS' } else { J 'EFFECT real chord -> popup FAIL' }
 if ($vis -eq 'visible') { & "$PSScriptRoot\sendkeys.ps1" -Chord 'Ctrl+Alt+Shift+Z'; Start-Sleep -Seconds 1 }
@@ -96,9 +102,9 @@ WaitW
 J ("EFFECT accent in settings.json: {0}" -f (SJson).appearance.accent)
 & "$PSScriptRoot\sendkeys.ps1" -Chord 'Alt+V'
 Start-Sleep -Seconds 2
-$accent = Eval $pid "getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || 'UNSET'"
-$addBtn = Eval $pid "getComputedStyle(document.querySelector('.add-btn')).backgroundColor"
-$tabs = Eval $pid "(() => { const c = document.querySelector('.tabs .count'); return c ? getComputedStyle(c).color : 'no-count'; })()"
+$accent = Eval $pupid "getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || 'UNSET'"
+$addBtn = Eval $pupid "getComputedStyle(document.querySelector('.add-btn')).backgroundColor"
+$tabs = Eval $pupid "(() => { const c = document.querySelector('.tabs .count'); return c ? getComputedStyle(c).color : 'no-count'; })()"
 J "EFFECT popup computed --accent: $accent (want #ff00ff)"
 J "EFFECT popup add-btn background: $addBtn (want rgb(255, 0, 255))"
 if ($accent -eq '#ff00ff') { J 'EFFECT accent recolours popup PASS' } else { J 'EFFECT accent recolours popup FAIL — no live wiring found' }
@@ -141,7 +147,7 @@ if ($oldRow) {
   MarkItem $oldId 'retention-old'
   DB "UPDATE items SET created_at = strftime('%s','now','-3 days')*1000 WHERE id = $oldId" | Out-Null
   # invoke janitor with null days -> must use the policy (1 day) pushed from the UI change
-  $res = & node "$PSScriptRoot\cdp.mjs" invoke $sid 'run_cleanup_now' '{"olderThanDays":null}'
+  $res = InvokeB64 $sid 'run_cleanup_now' '{"olderThanDays":null}'
   J "EFFECT janitor run (policy days) result: $res"
   $gone = DB "SELECT COUNT(*) FROM items WHERE id = $oldId"
   if ([int]$gone -eq 0) { J 'EFFECT retentionDays reached the janitor PASS' } else { J 'EFFECT retentionDays reached the janitor FAIL' }
@@ -174,7 +180,7 @@ J "EFFECT 2MB item row: $bigRow"
 if ($bigRow) {
   $bigId = $bigRow.Split('|')[0]
   MarkItem $bigId 'big-cap'
-  $res2 = & node "$PSScriptRoot\cdp.mjs" invoke $sid 'run_cleanup_now' '{"olderThanDays":null}'
+  $res2 = InvokeB64 $sid 'run_cleanup_now' '{"olderThanDays":null}'
   J "EFFECT janitor run (with cap) result: $res2"
   $bigGone = DB "SELECT COUNT(*) FROM items WHERE id = $bigId"
   if ([int]$bigGone -eq 0) { J 'EFFECT maxStoreBytes reached the janitor PASS' } else { J 'EFFECT maxStoreBytes reached the janitor FAIL' }
@@ -191,7 +197,7 @@ J ("EFFECT retentionDays restored: {0}" -f (SJson).storage.retentionDays)
 # ---- E6 storage meter vs sqlite ----
 # add a file reference item for the meter
 $filePath = (Resolve-Path 'docs\CONTRACTS.md').Path
-Set-Clipboard -Path $filePath
+Get-Item $filePath | Set-Clipboard
 Start-Sleep -Seconds 2
 $fileRow = DB "SELECT id, kind FROM items WHERE is_reference = 1 ORDER BY id DESC LIMIT 1"
 J "EFFECT file reference row: $fileRow"

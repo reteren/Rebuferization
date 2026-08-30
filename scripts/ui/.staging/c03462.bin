@@ -1,4 +1,0 @@
-const observer = new PerformanceObserver((list) => {
-  for (const e of list.getEntries()) log(e.duration);
-});
-observer.observe({ type: "longtask" });

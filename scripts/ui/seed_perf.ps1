@@ -21,9 +21,12 @@ $staging = Join-Path $PSScriptRoot '.staging'
 
 if (-not (Test-Path $tool)) { throw "seed-tool not built: $tool" }
 if (-not (Test-Path $db)) { throw "store db not found: $db" }
-if (Get-Process rebuffer -ErrorAction SilentlyContinue) {
-    throw 'rebuffer.exe is running — stop it before seeding (the app holds the DB lock)'
-}
+# NOTE: the settings worker keeps rebuffer.exe running against this same
+# store. WAL allows a second writer to interleave with the app's short
+# transactions, so seeding proceeds even while the app is up — the SQL file
+# sets a busy timeout, and the count verification below fails loudly if the
+# write contended. The app is restarted (by the run_perf orchestrator) after
+# seeding anyway, so its stale in-memory state never gets measured.
 
 $sqlite = (Get-Command sqlite3 -ErrorAction SilentlyContinue).Source
 if (-not $sqlite) { $sqlite = 'C:\msys64\mingw64\bin\sqlite3.exe' }
@@ -72,10 +75,12 @@ $domains = @(
     'www.producthunt.com','lobste.rs','arxiv.org','pub.dev','www.npmjs.com','platform.openai.com'
 )
 
-function New-Link {
+function New-Link([int]$itemId) {
     $d = $domains[$rng.Next($domains.Count)]
     $path = @('issues','docs','posts','items','questions','discussions','blog','wiki','users','releases')[$rng.Next(10)]
-    return "https://$d/$path/$($rng.Next(1000, 999999))"
+    # The ?ref= query is a tracking-parameter look-alike and makes the URL
+    # unique per item, which the content-hash unique index requires.
+    return "https://$d/$path/$($rng.Next(1000, 999999))?ref=$itemId"
 }
 
 $hexes = @(
@@ -85,20 +90,20 @@ $hexes = @(
 )
 
 $codeSnippets = @(
-    'const { grid, items } = $props();\nconst visible = $derived(items.slice(0, 200));',
-    'function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }',
-    'SELECT id, kind, preview_text FROM items WHERE kind = ?1 ORDER BY created_at DESC LIMIT 200;',
-    'def handle(items):\n    return [i for i in items if i.pinned]',
-    '{"id": 42, "kind": "text", "pinned": false, "tags": ["perf", "ui"], "nested": {"a": [1, 2, 3]}}',
-    'const observer = new PerformanceObserver((list) => {\n  for (const e of list.getEntries()) log(e.duration);\n});\nobserver.observe({ type: "longtask" });',
-    'export async function loadMore(): Promise<void> {\n  if (this.loading || !this.hasMore) return;\n  this.list = [...this.list, ...await listItems(200)];\n}',
-    'UPDATE items SET copy_count = copy_count + 1 WHERE hash = ?1;',
-    'fn materialize(paths: &[PathBuf]) -> AppResult<Vec<PathBuf>> {\n    paths.iter().map(|p| resolve(p)).collect()\n}',
-    '<script lang="ts">\n  let count = $state(0);\n  const bump = () => count += 1;\n</script>\n<button onclick={bump}>{count}</button>',
-    'PRAGMA journal_mode = WAL;\nPRAGMA synchronous = NORMAL;\nPRAGMA busy_timeout = 5000;',
-    'docker run --rm -p 8080:8080 -v ./data:/app/data rebuffer/perf',
-    'try {\n  const r = await invoke("list_items", { offset: 0, limit: 200 });\n  render(r);\n} catch (e) {\n  showError(e);\n}',
-    'interface GroupInfo {\n  key: string; label: string; top: number; rows: number;\n}'
+    'const { grid, items } = $props();\nconst visible = $derived(items.slice(0, {N}));',
+    'function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); } // {N}',
+    'SELECT id, kind, preview_text FROM items WHERE kind = ?1 ORDER BY created_at DESC LIMIT {N};',
+    'def handle(items):\n    return [i for i in items if i.pinned]  # {N}',
+    '{"id": {N}, "kind": "text", "pinned": false, "tags": ["perf", "ui"], "nested": {"a": [1, 2, 3]}}',
+    'const observer = new PerformanceObserver((list) => {\n  for (const e of list.getEntries()) log(e.duration);\n});\nobserver.observe({ type: "longtask" }); // {N}',
+    'export async function loadMore(): Promise<void> {\n  if (this.loading || !this.hasMore) return;\n  this.list = [...this.list, ...await listItems({N})];\n}',
+    'UPDATE items SET copy_count = copy_count + 1 WHERE hash = ?1; -- {N}',
+    'fn materialize(paths: &[PathBuf]) -> AppResult<Vec<PathBuf>> {\n    paths.iter().map(|p| resolve(p)).collect()\n} // {N}',
+    '<script lang="ts">\n  let count = $state({N});\n  const bump = () => count += 1;\n</script>\n<button onclick={bump}>{count}</button>',
+    'PRAGMA journal_mode = WAL;\nPRAGMA synchronous = NORMAL;\nPRAGMA busy_timeout = {N};',
+    'docker run --rm -p 8080:8080 -v ./data:/app/data rebuffer/perf-{N}',
+    'try {\n  const r = await invoke("list_items", { offset: 0, limit: {N} });\n  render(r);\n} catch (e) {\n  showError(e);\n}',
+    'interface GroupInfo {\n  key: string; label: string; top: number; rows: number;\n} // {N}'
 )
 
 $fileNames = @(
@@ -170,8 +175,14 @@ for ($i = 1; $i -le $total; $i++) {
 
     switch ($kind) {
         'short' {
-            $n = $rng.Next(2, 7)
-            $parts = for ($j = 0; $j -lt $n; $j++) { $words[$rng.Next($words.Count)] }
+            # Words are a base-170 encoding of the item index, so every short
+            # item is guaranteed distinct (random 2-6 word draws would collide
+            # on the unique content hash: ~1.4 expected at this pool size).
+            $n = 3 + ($idx % 3)
+            $parts = for ($j = 0; $j -lt $n; $j++) {
+                $digit = [int64]([math]::Floor($idx / [math]::Pow(170, $j))) % 170
+                $words[$digit]
+            }
             $spec.text = ($parts -join ' ')
             $spec.sub = 'plain'; $spec.ext = 'TXT'; $spec.mime = 'text/plain'; $spec.mode = 'text'
         }
@@ -194,16 +205,22 @@ for ($i = 1; $i -le $total; $i++) {
         }
         'code' {
             $snip = $codeSnippets[$rng.Next($codeSnippets.Count)] -replace '\\n', "`n"
+            # {N} is replaced with a per-item value so every code item is a
+            # distinct capture (the unique index is on the content hash).
+            $snip = $snip -replace '\{N\}', (100000 + $i * 97)
             $exts = @('JSON', 'TS', 'JS', 'SQL', 'PY', 'RS')
             $spec.text = $snip
             $spec.sub = 'code'; $spec.ext = $exts[$rng.Next($exts.Count)]; $spec.mime = 'text/plain'; $spec.mode = 'text'
         }
         'link' {
-            $spec.text = New-Link
+            $spec.text = New-Link $i
             $spec.sub = 'link'; $spec.ext = $null; $spec.mime = 'text/uri-list'; $spec.mode = 'text'
         }
         'color' {
-            $spec.text = $hexes[$rng.Next($hexes.Count)]
+            # Index-derived colour: the multiplier is coprime with 2^24, so the
+            # 800 colour items get 800 distinct hex values, never a duplicate.
+            $c = [int64]((($i - 1) * 3635633L) % 0x1000000L)
+            $spec.text = '#' + $c.ToString('X6')
             $spec.sub = 'color'; $spec.ext = $null; $spec.mime = 'text/plain'; $spec.mode = 'text'
         }
         'image' {
@@ -223,7 +240,9 @@ for ($i = 1; $i -le $total; $i++) {
         }
         'file' {
             $fn = $fileNames[$rng.Next($fileNames.Count)]
-            $fake = "REBUFFER-PERF-SEED $fn`n" + ('x' * $rng.Next(64, 1200))
+            # The item id line guarantees a distinct blob even when the name
+            # and padding length collide.
+            $fake = "REBUFFER-PERF-SEED $fn`nitem-$i`n" + ('x' * $rng.Next(64, 1200))
             $spec.bytes = [System.Text.Encoding]::UTF8.GetBytes($fake)
             $spec.fileName = $fn
             $spec.sub = $null; $spec.ext = ([System.IO.Path]::GetExtension($fn)).TrimStart('.').ToUpperInvariant()
@@ -234,7 +253,11 @@ for ($i = 1; $i -le $total; $i++) {
     $specs.Add([pscustomobject]$spec)
 
     $stage = Join-Path $staging ("c{0:D5}.bin" -f $idx)
-    if ($spec.PSObject.Properties.Name -contains 'bytes') {
+    # NOTE: on the ordered hashtable (before the pscustomobject conversion)
+    # the keys are NOT visible through .PSObject.Properties, so check the
+    # dictionary directly — writing an empty file here made every image and
+    # file item hash to the same digest on the first run.
+    if ($spec.Contains('bytes')) {
         [System.IO.File]::WriteAllBytes($stage, $spec.bytes)
     } else {
         [System.IO.File]::WriteAllText($stage, $spec.text, [System.Text.UTF8Encoding]::new($false))
@@ -274,10 +297,10 @@ foreach ($r in $hashResults) { $hashById[$r.id] = $r.hash }
 
 $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $sb = New-Object System.Text.StringBuilder
+[void]$sb.AppendLine('.timeout 10000')
 [void]$sb.AppendLine('BEGIN;')
 [void]$sb.AppendLine('DELETE FROM item_files;')
 [void]$sb.AppendLine('DELETE FROM items;')
-[void]$sb.AppendLine('DELETE FROM sqlite_sequence WHERE name IN (''items'', ''item_files'', ''item_formats'');')
 
 $counts = @{ short = 0; medium = 0; long = 0; code = 0; link = 0; color = 0; image = 0; file = 0 }
 $blobCount = 0
@@ -311,7 +334,14 @@ foreach ($spec in $specs) {
     }
 
     $id = $spec.id
-    $kindSql = if ($spec.kind -eq 'text') { "'text'" } elseif ($spec.kind -eq 'image') { "'image'" } else { "'file'" }
+    # The buckets returned by Get-KindFor are content shapes, not the store's
+    # kinds — map them here (a bug on the first run stamped everything as
+    # 'file').
+    $kindSql = switch ($spec.kind) {
+        { $_ -in @('short', 'medium', 'long', 'code', 'link', 'color') } { "'text'" }
+        'image' { "'image'" }
+        default { "'file'" }
+    }
     $subSql = if ($spec.sub) { "'$($spec.sub)'" } else { 'NULL' }
     $extSql = if ($spec.ext) { "'$($spec.ext)'" } else { 'NULL' }
     $titleSql = if ($spec.title) { "'$($spec.title.Replace("'", "''"))'" } else { 'NULL' }
@@ -360,6 +390,9 @@ if ($LASTEXITCODE -ne 0) { throw "sqlite3 failed: $LASTEXITCODE" }
 # ---------------------------------------------------------------------------
 
 $finalCount = & $sqlite $db "SELECT COUNT(*) FROM items;"
+if ([int]$finalCount -ne $total) {
+    throw "seed failed: expected $total items, got $finalCount"
+}
 $byKind = & $sqlite $db "SELECT kind, COUNT(*) FROM items GROUP BY kind ORDER BY kind;"
 $byDay = & $sqlite $db "SELECT date(created_at / 1000, 'unixepoch', 'localtime') d, COUNT(*) FROM items GROUP BY d ORDER BY d;"
 $imgThumbs = & $sqlite $db "SELECT COUNT(*) FROM items WHERE kind = 'image' AND thumb_path IS NOT NULL;"

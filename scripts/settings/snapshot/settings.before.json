@@ -7,16 +7,16 @@
   "storage": {
     "path": "",
     "retentionDays": 30,
-    "maxItemBytes": 268435456,
+    "maxItemBytes": 33554432,
     "maxStoreBytes": null,
     "notifyWhenFull": true
   },
   "window": {
-    "sizeMode": "percent",
-    "percentOfMonitor": 40,
+    "sizeMode": "fixed",
+    "percentOfMonitor": 50,
     "fixed": {
-      "width": 1100,
-      "height": 700
+      "width": 760,
+      "height": 520
     },
     "zoomStep": 1
   },

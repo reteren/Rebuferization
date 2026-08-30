@@ -1,6 +1,0 @@
-try {
-  const r = await invoke("list_items", { offset: 0, limit: 200 });
-  render(r);
-} catch (e) {
-  showError(e);
-}
