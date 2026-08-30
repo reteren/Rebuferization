@@ -29,6 +29,10 @@ use crate::store::Store;
 
 /// Managed state, resolved by every command through `State<'_, AppState>`.
 pub struct AppState {
+    /// Keeps the non-blocking log writer alive. Dropping it shuts the writer
+    /// down, and every later line is discarded — which reads exactly like the
+    /// app going silent after startup.
+    pub _log_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
     pub store: Arc<Store>,
     pub settings: Arc<SettingsStore>,
     pub clipboard: Arc<ClipboardWatcher>,
@@ -64,7 +68,7 @@ pub fn run() {
             let settings = Arc::new(SettingsStore::load(&settings_path)?);
             let resolved = settings.get();
 
-            let _log_guard = logging::init(&resolved.store_root().join("logs"));
+            let log_guard = logging::init(&resolved.store_root().join("logs"));
 
             let store_root = resolved.store_root();
 
@@ -139,7 +143,7 @@ pub fn run() {
 
             tray::install(&handle)?;
 
-            app.manage(AppState { store, settings, clipboard, hotkeys });
+            app.manage(AppState { _log_guard: log_guard, store, settings, clipboard, hotkeys });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
