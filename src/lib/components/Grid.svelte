@@ -140,24 +140,45 @@
   })
 
   interface VCell {
+    id: number
     item: ItemDto
     x: number
     y: number
   }
 
-  interface Section {
+  interface HeaderCell {
     key: string
-    header: string | null
+    label: string
     top: number
-    height: number
-    cards: VCell[]
+    pinned: boolean
   }
 
-  const sections = $derived.by((): Section[] => {
+  // Every group top and every card coordinate below is in the same document
+  // space as the spacer: cards and headers are positioned directly inside the
+  // spacer, so nothing is double-translated the way nesting a card inside a
+  // translated group element was.
+  //
+  // The pinned header is the one CSS `position: sticky` used to provide: the
+  // last group whose top has scrolled past the viewport top. Its header is
+  // translated to sit at the viewport top and floats above the cards, which
+  // scroll underneath it. Because the decision is made from the group tops
+  // (not from a sticky layout box), it stays correct for every group, not just
+  // the first, and after zoom re-layouts.
+  const pinnedGroup = $derived.by((): GroupInfo | null => {
+    if (!grouped || groups.length === 0) return null
+    let last: GroupInfo | null = null
+    for (const g of groups) {
+      if (g.top <= scrollTop) last = g
+      else break
+    }
+    return last
+  })
+
+  const visibleCards = $derived.by((): VCell[] => {
+    const viewTop = scrollTop - OVERSCAN_PX
+    const viewBottom = scrollTop + clientHeight + OVERSCAN_PX
+    const cards: VCell[] = []
     if (grouped) {
-      const viewTop = scrollTop - OVERSCAN_PX
-      const viewBottom = scrollTop + clientHeight + OVERSCAN_PX
-      const out: Section[] = []
       for (const g of groups) {
         if (g.top + g.height < viewTop || g.top > viewBottom) continue
         const base = g.top + headerH
@@ -165,35 +186,47 @@
         const lastRow = Math.min(g.rows - 1, Math.floor((viewBottom - base) / pitchH))
         const start = firstRow * columns
         const end = Math.min(g.items.length, (lastRow + 1) * columns)
-        const cards: VCell[] = []
         for (let i = start; i < end; i++) {
           const it = g.items[i]
           if (!it) continue
           cards.push({
+            id: it.id,
             item: it,
             x: pad + (i % columns) * pitchW,
             y: base + Math.floor(i / columns) * pitchH,
           })
         }
-        out.push({ key: g.key, header: g.label, top: g.top, height: g.height, cards })
       }
-      return out
-    }
-    const cards: VCell[] = []
-    if (items.length > 0 && clientHeight > 0) {
-      const viewTop = scrollTop - OVERSCAN_PX
-      const viewBottom = scrollTop + clientHeight + OVERSCAN_PX
+    } else if (items.length > 0 && clientHeight > 0) {
       const firstRow = Math.max(0, Math.floor((viewTop - pad) / pitchH))
       const lastRow = Math.min(Math.ceil(items.length / columns) - 1, Math.floor((viewBottom - pad) / pitchH))
       for (let r = firstRow; r <= lastRow; r++) {
         for (let c = 0; c < columns; c++) {
           const it = items[r * columns + c]
           if (!it) break
-          cards.push({ item: it, x: pad + c * pitchW, y: pad + r * pitchH })
+          cards.push({ id: it.id, item: it, x: pad + c * pitchW, y: pad + r * pitchH })
         }
       }
     }
-    return [{ key: 'flat', header: null, top: 0, height: totalHeight, cards }]
+    return cards
+  })
+
+  const visibleHeaders = $derived.by((): HeaderCell[] => {
+    if (!grouped) return []
+    const viewTop = scrollTop - OVERSCAN_PX
+    const viewBottom = scrollTop + clientHeight + OVERSCAN_PX
+    const headers: HeaderCell[] = []
+    for (const g of groups) {
+      if (g.top + headerH < viewTop || g.top > viewBottom) continue
+      headers.push({ key: g.key, label: g.label, top: g.top, pinned: g.key === pinnedGroup?.key })
+    }
+    // Once we have scrolled far past the pinned group its header's natural
+    // position is above the overscan window, so the loop above did not render
+    // it; render it pinned-only so the viewport-top header is never missing.
+    if (pinnedGroup && pinnedGroup.top + headerH < viewTop) {
+      headers.push({ key: pinnedGroup.key, label: pinnedGroup.label, top: pinnedGroup.top, pinned: true })
+    }
+    return headers
   })
 
   $effect(() => {
@@ -225,26 +258,28 @@
 >
   {#if items.length > 0}
     <div class="spacer" style="height:{totalHeight}px">
-      {#each sections as sec (sec.key)}
-        <section class="group" style="height:{sec.height}px; translate:0 {sec.top}px">
-          {#if sec.header}
-            <div class="group-header">{sec.header}</div>
-          {/if}
-          {#each sec.cards as c (c.item.id)}
-            <Card
-              item={c.item}
-              selected={selectedIds.has(c.item.id)}
-              focused={c.item.id === focusedId}
-              zoom={z}
-              showAge={showAge}
-              formatLabelSize={labelSize}
-              style="position:absolute; left:0; top:0; width:{tileW}px; height:{tileH}px; translate:{c.x}px {c.y}px"
-              onactivate={onactivate}
-              oncontextmenu={oncontextmenu}
-              ontoggle={ontoggle}
-            />
-          {/each}
-        </section>
+      {#each visibleHeaders as h (h.key)}
+        <div
+          class="group-header"
+          class:pinned={h.pinned}
+          style="top:{h.top}px;{h.pinned ? `transform: translateY(${scrollTop - h.top}px);` : ''}"
+        >
+          {h.label}
+        </div>
+      {/each}
+      {#each visibleCards as c (c.id)}
+        <Card
+          item={c.item}
+          selected={selectedIds.has(c.item.id)}
+          focused={c.item.id === focusedId}
+          zoom={z}
+          showAge={showAge}
+          formatLabelSize={labelSize}
+          style="position:absolute; left:{c.x}px; top:{c.y}px; width:{tileW}px; height:{tileH}px"
+          onactivate={onactivate}
+          oncontextmenu={oncontextmenu}
+          ontoggle={ontoggle}
+        />
       {/each}
     </div>
   {/if}
@@ -265,12 +300,9 @@
     width: 100%;
   }
 
-  .group {
-    position: static;
-  }
-
   .group-header {
-    position: sticky;
+    position: absolute;
+    left: 0;
     top: 0;
     z-index: 6;
     height: var(--group-header-h);
@@ -285,5 +317,10 @@
     backdrop-filter: blur(var(--glass-blur));
     user-select: none;
     -webkit-user-select: none;
+  }
+
+  .group-header.pinned {
+    z-index: 7;
+    will-change: transform;
   }
 </style>

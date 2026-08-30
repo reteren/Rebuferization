@@ -5,6 +5,17 @@
 import { getSettings, onSettingsChanged, updateSettings } from '../ipc'
 import type { Settings, SettingsPatch } from '../types'
 
+/** Mirrors the appearance fields that drive document-level styling. */
+function applyAppearance(a: Settings['appearance']): void {
+  const root = document.documentElement
+  // Every var(--accent) reference in tokens.css and the components follows
+  // this; --accent-soft / --accent-strong derive from it via color-mix.
+  root.style.setProperty('--accent', a.accent)
+  // global.css ships a reduced-motion override keyed on this attribute.
+  if (a.reduceMotion) root.setAttribute('data-reduce-motion', '')
+  else root.removeAttribute('data-reduce-motion')
+}
+
 /** Mirrors src-tauri/src/settings.rs defaults so the UI renders before the
  * first successful get_settings, and so it has sane values if the Rust side
  * is not up yet. */
@@ -73,6 +84,7 @@ class SettingsStore {
   async reload(): Promise<void> {
     try {
       this.current = await getSettings()
+      applyAppearance(this.current.appearance)
     } catch {
       // Backend not reachable (parallel build); keep what we have.
     }
@@ -84,9 +96,11 @@ class SettingsStore {
     } catch {
       // Backend not reachable (parallel build); defaults stand in.
     }
+    applyAppearance(this.current.appearance)
     this.unlisten?.()
     this.unlisten = await onSettingsChanged((next) => {
       this.current = next
+      applyAppearance(this.current.appearance)
     })
   }
 
@@ -94,6 +108,7 @@ class SettingsStore {
   async patch(p: SettingsPatch): Promise<void> {
     const next = await updateSettings(p)
     this.current = next
+    applyAppearance(this.current.appearance)
   }
 }
 

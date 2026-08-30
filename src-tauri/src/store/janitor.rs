@@ -3,6 +3,7 @@
 //!
 //! OWNER: worker W1. All three long operations emit `store-progress`.
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,28 +66,99 @@ fn get_free_disk_space(_path: &Path) -> Option<u64> {
 /// 1. Deletes leftover `.tmp` files in the `blobs/` tree.
 /// 2. Deletes rows whose primary blob is missing on disk.
 /// 3. Deletes blob files that no row references.
+///
+/// The old implementation ran one or two SQL queries PER FILE on disk
+/// (a `COUNT(*)` per blob/thumb, and a leading-wildcard `LIKE '%<hash>'` per
+/// blob that scans the whole `item_formats` table). At 10,000 items that was
+/// ~30,000 queries and a ~100 s cold start. This version reads the full
+/// reference set into memory with TWO queries and then walks the tree once,
+/// testing membership against the sets — the walk also produces the set of
+/// blob paths that exist on disk, so part 2 is a set lookup per row instead
+/// of a filesystem stat per row.
+///
+/// Deliberately synchronous: it runs inside `Store::open`, before the
+/// clipboard listener starts. It cannot safely run later on a background
+/// thread — `insert_capture` writes a blob to disk *before* it inserts the
+/// row that references it, so a sweep that overlaps a capture can observe a
+/// fresh blob whose row is not yet committed and delete it as an orphan (or,
+/// reordered, a committed row whose blob has not been written yet). The
+/// synchronous path has no such window, and at the corrected cost the sweep
+/// is ~100 ms at 10,000 items — not worth the race.
 pub fn startup_sweep(store: &Store) -> AppResult<()> {
     let root = store.root().to_path_buf();
     let blobs_dir = root.join("blobs");
-    let thumbs_dir = blobs_dir.join("thumbs");
 
     if !blobs_dir.exists() {
         return Ok(());
     }
 
-    // 1. Remove leftover temp files
+    let conn_guard = store.conn();
+
+    // Reference set #1: every hash referenced by an items row (covers both
+    // primary blobs and thumbnails, which are keyed by the item hash).
+    let item_hashes: HashSet<String> = {
+        let mut stmt = conn_guard.prepare("SELECT DISTINCT hash FROM items")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    // Reference set #2: format blobs, referenced by their `ab/cd/<hash>` rel
+    // path. The file-name component IS the hash, so storing that makes the
+    // comparison exact instead of a per-file `LIKE '%<hash>'`.
+    let format_hashes: HashSet<String> = {
+        let mut stmt = conn_guard
+            .prepare("SELECT blob_path FROM item_formats WHERE blob_path IS NOT NULL")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.filter_map(|r| r.ok())
+            .filter_map(|p| {
+                Path::new(&p)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+            })
+            .collect()
+    };
+
+    // One walk over the whole `blobs/` tree. Each file is stat'd exactly once
+    // and never costs a query.
+    let mut existing_blobs: HashSet<String> = HashSet::new();
     for entry in WalkDir::new(&blobs_dir).into_iter().flatten() {
-        if entry.file_type().is_file() {
-            let file_name = entry.file_name().to_string_lossy();
-            if file_name.contains(".tmp.") || file_name.ends_with(".tmp") {
-                let _ = std::fs::remove_file(entry.path());
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let file_name = entry.file_name().to_string_lossy();
+
+        // Part 1: leftover temp files (atomic-write leftovers from a crash).
+        if file_name.contains(".tmp.") || file_name.ends_with(".tmp") {
+            let _ = std::fs::remove_file(path);
+            continue;
+        }
+
+        if path.starts_with(&blobs_dir.join("thumbs")) {
+            // Part 3, thumbnails: a thumb is keyed by the item hash.
+            if let Some(hash) = file_name.strip_suffix(".webp") {
+                if !item_hashes.contains(hash) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        } else {
+            // Part 3, primary blobs: record the rel path (feeds part 2), then
+            // delete the file if neither reference set knows its hash.
+            if let Ok(rel) = path.strip_prefix(&blobs_dir) {
+                existing_blobs.insert(normalize_rel(rel));
+            }
+            if file_name.len() == 64 {
+                let hash = file_name.as_ref();
+                if !item_hashes.contains(hash) && !format_hashes.contains(hash) {
+                    let _ = std::fs::remove_file(path);
+                }
             }
         }
     }
 
-    let conn_guard = store.conn();
-
-    // 2. Remove rows whose blob is missing
+    // Part 2: rows whose primary blob is missing on disk. The walk above has
+    // already stat'd the tree; this is a set lookup per row, and the DELETE
+    // only ever runs for rows that are genuinely broken.
     {
         let mut stmt = conn_guard.prepare(
             "SELECT id, blob_path FROM items WHERE is_reference = 0 AND blob_path IS NOT NULL",
@@ -97,8 +169,7 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
             .collect();
 
         for (id, blob_path) in rows {
-            let full_path = blobs_dir.join(&blob_path);
-            if !full_path.exists() {
+            if !existing_blobs.contains(&blob_path) {
                 tracing::warn!(
                     "Startup integrity sweep: deleting row {} with missing blob {}",
                     id,
@@ -109,50 +180,13 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
         }
     }
 
-    // 3. Remove blobs that no row references
-    for entry in WalkDir::new(&blobs_dir).into_iter().flatten() {
-        if entry.file_type().is_file() {
-            let path = entry.path();
-            if path.starts_with(&thumbs_dir) {
-                let file_name = entry.file_name().to_string_lossy();
-                if let Some(hash) = file_name.strip_suffix(".webp") {
-                    let count: i64 = conn_guard
-                        .query_row(
-                            "SELECT COUNT(*) FROM items WHERE hash = ?1",
-                            [hash],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0);
-                    if count == 0 {
-                        let _ = std::fs::remove_file(path);
-                    }
-                }
-            } else {
-                let hash = entry.file_name().to_string_lossy().to_string();
-                if !hash.contains(".tmp") && hash.len() == 64 {
-                    let count_items: i64 = conn_guard
-                        .query_row(
-                            "SELECT COUNT(*) FROM items WHERE hash = ?1",
-                            [&hash],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0);
-                    let count_formats: i64 = conn_guard
-                        .query_row(
-                            "SELECT COUNT(*) FROM item_formats WHERE blob_path LIKE ?1",
-                            [format!("%{}", hash)],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0);
-                    if count_items + count_formats == 0 {
-                        let _ = std::fs::remove_file(path);
-                    }
-                }
-            }
-        }
-    }
-
     Ok(())
+}
+
+/// The DB stores blob rel-paths with forward slashes; the directory walk
+/// yields platform separators. Normalize so the two compare equal.
+fn normalize_rel(rel: &Path) -> String {
+    rel.to_string_lossy().replace('\\', "/")
 }
 
 /// Runs the age sweep and size cap pruning with optional AppHandle for events.
@@ -932,6 +966,22 @@ mod tests {
 
         // -- seed phase -----------------------------------------------------
         let mut blob_rels = Vec::with_capacity(N as usize);
+        // Orphan file identities, needed both for seeding and for the
+        // post-sweep assertions.
+        let orphan_hash = crate::store::blobs::compute_hash(b"orphan-blob");
+        let orphan_thumb_hash = crate::store::blobs::compute_hash(b"orphan-thumb");
+        let orphan_tmp_hash = crate::store::blobs::compute_hash(b"orphan-tmp");
+        let orphan_blob = root
+            .join("blobs")
+            .join(crate::store::blobs::blob_rel_path(&orphan_hash));
+        let orphan_thumb = root
+            .join("blobs")
+            .join("thumbs")
+            .join(format!("{orphan_thumb_hash}.webp"));
+        let orphan_tmp = root
+            .join("blobs")
+            .join(crate::store::blobs::blob_rel_path(&orphan_tmp_hash))
+            .with_extension("tmp.1_1_1");
         {
             let store = Store::open(&root).unwrap();
             let mut conn = store.conn();
@@ -1003,9 +1053,11 @@ mod tests {
 
             // Orphan files the sweep must delete: a stray blob, a stray thumb,
             // and a leftover tmp file.
-            std::fs::write(root.join("blobs").join("aa/bb/ffaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), b"orphan").unwrap();
-            std::fs::write(root.join("blobs").join("thumbs").join("ffeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.webp"), b"orphan").unwrap();
-            std::fs::write(root.join("blobs").join("cc/dd/ffbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.tmp.1_1_1"), b"tmp").unwrap();
+            std::fs::create_dir_all(orphan_blob.parent().unwrap()).unwrap();
+            std::fs::write(&orphan_blob, b"orphan").unwrap();
+            std::fs::write(&orphan_thumb, b"orphan").unwrap();
+            std::fs::create_dir_all(orphan_tmp.parent().unwrap()).unwrap();
+            std::fs::write(&orphan_tmp, b"tmp").unwrap();
         }
 
         // -- timing phase: reopening runs the startup sweep ------------------
@@ -1019,18 +1071,9 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, N, "missing-blob row must be deleted");
-        assert!(
-            !root.join("blobs").join("aa/bb/ffaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").exists(),
-            "orphan blob must be deleted"
-        );
-        assert!(
-            !root.join("blobs").join("thumbs/ffeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.webp").exists(),
-            "orphan thumb must be deleted"
-        );
-        assert!(
-            !root.join("blobs").join("cc/dd/ffbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.tmp.1_1_1").exists(),
-            "leftover tmp file must be deleted"
-        );
+        assert!(!orphan_blob.exists(), "orphan blob must be deleted");
+        assert!(!orphan_thumb.exists(), "orphan thumb must be deleted");
+        assert!(!orphan_tmp.exists(), "leftover tmp file must be deleted");
         // All 10k item blobs and all 5k format-only blobs must survive.
         let blobs_ok = blob_rels
             .iter()

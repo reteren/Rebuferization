@@ -9,10 +9,14 @@
     exportData,
     getStorageStats,
     importData,
+    onItemAdded,
+    onItemsDeleted,
+    onStorageWarning,
     onStoreProgress,
     relocateStore,
     runCleanupNow,
     setCaptureEnabled,
+    type UnlistenFn,
   } from '../lib/ipc'
   import { settings } from '../lib/stores/settings.svelte'
   import type { CleanupResult, ImportMode, SettingsPatch, StorageStats, StoreProgress } from '../lib/types'
@@ -98,9 +102,23 @@
     }).then((fn) => {
       unlisten = fn
     })
+    // The meter is a snapshot of the DB; keep it honest while this window is
+    // open by refreshing on every event that changes the store. The janitor's
+    // prunes arrive as storage-warning (it does not always emit items-deleted).
+    let statListeners: UnlistenFn[] = []
+    void onItemAdded(() => refreshStats()).then((fn) => statListeners.push(fn))
+    void onItemsDeleted(() => refreshStats()).then((fn) => statListeners.push(fn))
+    void onStorageWarning(() => refreshStats()).then((fn) => statListeners.push(fn))
     return () => {
       unlisten?.()
+      for (const fn of statListeners) fn()
     }
+  })
+
+  // A capture or prune while the window sat on another section should not
+  // leave the panel lying when the user finally navigates to it.
+  $effect(() => {
+    if (section === 'storage') void refreshStats()
   })
 
   $effect(() => {
@@ -227,7 +245,11 @@
       await settings.reload()
       await refreshStats()
     } catch (err) {
-      error = String(err)
+      error = `Could not move the store: ${String(err)}`
+    } finally {
+      // The Rust side emits store-progress with a trailing "completed" phase;
+      // a failure may not, so never leave the banner stuck on an error path.
+      progress = null
     }
   }
 
@@ -236,7 +258,7 @@
       cleanup = await runCleanupNow(cleanDays)
       await refreshStats()
     } catch (err) {
-      error = String(err)
+      error = `Clean up failed: ${String(err)}`
     }
   }
 
@@ -279,7 +301,9 @@
     try {
       await exportData(target)
     } catch (err) {
-      error = String(err)
+      error = `Export failed: ${String(err)}`
+    } finally {
+      progress = null
     }
   }
 
@@ -296,7 +320,9 @@
       await settings.reload()
       await refreshStats()
     } catch (err) {
-      error = String(err)
+      error = `Import failed: ${String(err)}`
+    } finally {
+      progress = null
     }
   }
 

@@ -14,18 +14,20 @@
     ontoggle?: (item: ItemDto, mode: 'single' | 'ctrl' | 'shift') => void
   }
 
-  let {
-    item,
-    selected,
-    focused,
-    zoom,
-    showAge,
-    formatLabelSize,
-    style,
-    onactivate,
-    oncontextmenu,
-    ontoggle,
-  }: Props = $props()
+  let { item, selected, focused, zoom, showAge, formatLabelSize, style, onactivate, oncontextmenu, ontoggle }: Props =
+    $props()
+
+  // A thumbnail that fails to load (asset protocol 404 after a janitor prune,
+  // a thumb never generated) degrades to the same placeholder a thumbnail-less
+  // card uses instead of a broken-image glyph. Once the <img> errors it is
+  // removed, so the card stops re-requesting the missing file.
+  let thumbFailed = $state(false)
+  $effect(() => {
+    void item.thumbUrl
+    thumbFailed = false
+  })
+
+  const showThumb = $derived(Boolean(item.thumbUrl) && !item.missing && !thumbFailed)
 
   const KIND_FALLBACK: Record<Kind, string> = {
     text: 'TXT',
@@ -127,14 +129,14 @@
 >
   <div class="preview">
     {#if item.kind === 'image'}
-      {#if item.thumbUrl}
-        <img class="thumb" src={item.thumbUrl} alt="" draggable="false" decoding="async" />
+      {#if showThumb}
+        <img class="thumb" src={item.thumbUrl!} alt="" draggable="false" decoding="async" onerror={() => { thumbFailed = true }} />
       {:else}
         <div class="glyph-fallback"></div>
       {/if}
     {:else if item.kind === 'video'}
-      {#if item.thumbUrl}
-        <img class="thumb" src={item.thumbUrl} alt="" draggable="false" decoding="async" />
+      {#if showThumb}
+        <img class="thumb" src={item.thumbUrl!} alt="" draggable="false" decoding="async" onerror={() => { thumbFailed = true }} />
       {/if}
       <span class="play" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="13" height="13"><path d="M8.2 5.6v12.8L19 12z" fill="currentColor" /></svg>
