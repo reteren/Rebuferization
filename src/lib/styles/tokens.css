@@ -1,2 +1,80 @@
-/* OWNER: worker W5 — dark liquid glass design tokens. */
-:root { color-scheme: dark; }
+/* OWNER: worker W5 — dark liquid glass design tokens.
+   Every component reads tokens; nothing hardcodes a color, radius or duration.
+   --accent is overridden at runtime from settings — reference it everywhere. */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- surfaces ------------------------------------------------------ */
+  --bg-0: #0c0e13;                          /* deepest backdrop */
+  --bg-1: rgba(16, 18, 24, 0.72);           /* window wash */
+  --surface-1: rgba(26, 29, 38, 0.78);      /* cards */
+  --surface-2: rgba(30, 34, 44, 0.82);      /* raised controls */
+  --surface-3: rgba(38, 42, 55, 0.92);      /* popovers */
+  --surface-4: rgba(46, 51, 66, 0.95);      /* hovered controls */
+
+  /* ---- borders ------------------------------------------------------- */
+  --border-1: rgba(255, 255, 255, 0.07);
+  --border-2: rgba(255, 255, 255, 0.13);
+  --border-3: rgba(255, 255, 255, 0.22);
+  --window-border: rgba(255, 255, 255, 0.08);  /* 1px inner glass border */
+
+  /* ---- text ---------------------------------------------------------- */
+  --text-1: #e9ecf4;
+  --text-2: rgba(233, 236, 244, 0.62);
+  --text-3: rgba(233, 236, 244, 0.38);
+
+  /* ---- accent (overridden at runtime from settings) ------------------ */
+  --accent: #7aa2ff;
+  --on-accent: #0a0d14;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-strong: color-mix(in srgb, var(--accent) 90%, #ffffff);
+
+  /* ---- status -------------------------------------------------------- */
+  --danger: #f7768e;
+  --danger-soft: color-mix(in srgb, var(--danger) 16%, transparent);
+  --ok: #4ec9b0;
+  --warn: #e0af68;
+
+  /* ---- shadows ------------------------------------------------------- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 18px 60px rgba(0, 0, 0, 0.55);
+
+  /* ---- radii --------------------------------------------------------- */
+  --r-xs: 4px;
+  --r-sm: 7px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+  --card-radius: var(--r-md);
+
+  /* ---- type ---------------------------------------------------------- */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace;
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 19px;
+
+  /* ---- motion -------------------------------------------------------- */
+  --dur-fast: 90ms;
+  --dur-med: 160ms;
+  --dur-slow: 280ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ---- grid ---------------------------------------------------------- */
+  --grid-gap: 10px;
+  --grid-pad: 16px;
+  --group-header-h: 32px;
+
+  /* ---- glass --------------------------------------------------------- */
+  --glass-blur: 18px;
+  --window-wash:
+    radial-gradient(130% 90% at 8% -12%, rgba(122, 162, 255, 0.09), transparent 55%),
+    radial-gradient(110% 80% at 96% 112%, rgba(78, 201, 176, 0.06), transparent 55%),
+    radial-gradient(70% 60% at 55% 45%, rgba(187, 154, 247, 0.04), transparent 60%);
+}

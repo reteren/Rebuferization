@@ -1,0 +1,289 @@
+<script lang="ts">
+  import { untrack } from 'svelte'
+  import Card from './Card.svelte'
+  import type { ItemDto } from '../types'
+
+  interface Props {
+    items: ItemDto[]
+    zoom: number
+    grouped: boolean
+    selectedIds: Set<number>
+    focusedId: number | null
+    showAge: boolean
+    formatLabelSize: string
+    onactivate?: (item: ItemDto) => void
+    oncontextmenu?: (item: ItemDto, x: number, y: number) => void
+    ontoggle?: (item: ItemDto, mode: 'single' | 'ctrl' | 'shift') => void
+  }
+
+  let {
+    items,
+    zoom,
+    grouped,
+    selectedIds,
+    focusedId,
+    showAge,
+    formatLabelSize,
+    onactivate,
+    oncontextmenu,
+    ontoggle,
+  }: Props = $props()
+
+  const TILE_W = [72, 92, 116, 148, 188] as const
+  const TILE_H = [96, 122, 154, 196, 250] as const
+  const OVERSCAN_PX = 320
+
+  let el = $state<HTMLDivElement | null>(null)
+  let scrollTop = $state(0)
+  let clientWidth = $state(0)
+  let clientHeight = $state(0)
+  let gap = $state(10)
+  let pad = $state(16)
+  let headerH = $state(32)
+
+  $effect(() => {
+    const node = el
+    if (!node) return
+    const cs = getComputedStyle(node)
+    gap = parseFloat(cs.getPropertyValue('--grid-gap')) || 10
+    pad = parseFloat(cs.getPropertyValue('--grid-pad')) || 16
+    headerH = parseFloat(cs.getPropertyValue('--group-header-h')) || 32
+  })
+
+  const z = $derived(Math.min(5, Math.max(1, Math.round(zoom))))
+  const tileW = $derived(TILE_W[z - 1] ?? 116)
+  const tileH = $derived(TILE_H[z - 1] ?? 154)
+  const pitchW = $derived(tileW + gap)
+  const pitchH = $derived(tileH + gap)
+  const columns = $derived(
+    clientWidth > 0 ? Math.max(1, Math.floor((clientWidth - pad * 2 + gap) / pitchW)) : 1,
+  )
+
+  const labelSize = $derived(
+    formatLabelSize === 'off' || formatLabelSize === 'small' || formatLabelSize === 'medium' || formatLabelSize === 'large'
+      ? formatLabelSize
+      : 'medium',
+  )
+
+  function groupLabel(ts: number): string {
+    const d = new Date(ts)
+    const now = new Date()
+    const day = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())
+    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+    if (day === today) return 'Today'
+    if (day === today - 86_400_000) return 'Yesterday'
+    const opts: Intl.DateTimeFormatOptions =
+      d.getFullYear() === now.getFullYear()
+        ? { day: 'numeric', month: 'long' }
+        : { day: 'numeric', month: 'long', year: 'numeric' }
+    return d.toLocaleDateString('en-GB', opts)
+  }
+
+  interface GroupInfo {
+    key: string
+    label: string
+    items: ItemDto[]
+    top: number
+    rows: number
+    height: number
+  }
+
+  const groups = $derived.by((): GroupInfo[] => {
+    if (!grouped) return []
+    const map = new Map<string, ItemDto[]>()
+    for (const it of items) {
+      const label = groupLabel(it.createdAt)
+      const arr = map.get(label)
+      if (arr) arr.push(it)
+      else map.set(label, [it])
+    }
+    const out: GroupInfo[] = []
+    let y = pad
+    for (const [label, arr] of map) {
+      const rows = Math.ceil(arr.length / columns)
+      const height = headerH + rows * pitchH - gap
+      out.push({ key: label, label, items: arr, top: y, rows, height })
+      y += height + gap
+    }
+    return out
+  })
+
+  const totalHeight = $derived.by(() => {
+    if (grouped) {
+      let h = pad
+      for (const g of groups) h += g.height + gap
+      return h + pad
+    }
+    const rows = Math.ceil(items.length / columns)
+    return pad * 2 + Math.max(0, rows * pitchH - gap)
+  })
+
+  const rowOf = $derived.by(() => {
+    const map = new Map<number, number>()
+    if (grouped) {
+      for (const g of groups) {
+        const base = g.top + headerH
+        let i = 0
+        for (const it of g.items) {
+          map.set(it.id, base + Math.floor(i / columns) * pitchH)
+          i++
+        }
+      }
+    } else {
+      let i = 0
+      for (const it of items) {
+        map.set(it.id, pad + Math.floor(i / columns) * pitchH)
+        i++
+      }
+    }
+    return map
+  })
+
+  interface VCell {
+    item: ItemDto
+    x: number
+    y: number
+  }
+
+  interface Section {
+    key: string
+    header: string | null
+    top: number
+    height: number
+    cards: VCell[]
+  }
+
+  const sections = $derived.by((): Section[] => {
+    if (grouped) {
+      const viewTop = scrollTop - OVERSCAN_PX
+      const viewBottom = scrollTop + clientHeight + OVERSCAN_PX
+      const out: Section[] = []
+      for (const g of groups) {
+        if (g.top + g.height < viewTop || g.top > viewBottom) continue
+        const base = g.top + headerH
+        const firstRow = Math.max(0, Math.floor((viewTop - base) / pitchH))
+        const lastRow = Math.min(g.rows - 1, Math.floor((viewBottom - base) / pitchH))
+        const start = firstRow * columns
+        const end = Math.min(g.items.length, (lastRow + 1) * columns)
+        const cards: VCell[] = []
+        for (let i = start; i < end; i++) {
+          const it = g.items[i]
+          if (!it) continue
+          cards.push({
+            item: it,
+            x: pad + (i % columns) * pitchW,
+            y: base + Math.floor(i / columns) * pitchH,
+          })
+        }
+        out.push({ key: g.key, header: g.label, top: g.top, height: g.height, cards })
+      }
+      return out
+    }
+    const cards: VCell[] = []
+    if (items.length > 0 && clientHeight > 0) {
+      const viewTop = scrollTop - OVERSCAN_PX
+      const viewBottom = scrollTop + clientHeight + OVERSCAN_PX
+      const firstRow = Math.max(0, Math.floor((viewTop - pad) / pitchH))
+      const lastRow = Math.min(Math.ceil(items.length / columns) - 1, Math.floor((viewBottom - pad) / pitchH))
+      for (let r = firstRow; r <= lastRow; r++) {
+        for (let c = 0; c < columns; c++) {
+          const it = items[r * columns + c]
+          if (!it) break
+          cards.push({ item: it, x: pad + c * pitchW, y: pad + r * pitchH })
+        }
+      }
+    }
+    return [{ key: 'flat', header: null, top: 0, height: totalHeight, cards }]
+  })
+
+  $effect(() => {
+    const id = focusedId
+    const node = el
+    if (id == null || !node) return
+    const top = rowOf.get(id)
+    if (top == null) return
+    const st = untrack(() => node.scrollTop)
+    const vh = untrack(() => node.clientHeight)
+    if (top < st || top + tileH > st + vh) {
+      node.scrollTop = Math.max(0, top - vh / 3)
+    }
+  })
+
+  function onScroll(): void {
+    if (el) scrollTop = el.scrollTop
+  }
+</script>
+
+<div
+  class="grid"
+  bind:this={el}
+  bind:clientWidth={clientWidth}
+  bind:clientHeight={clientHeight}
+  role="grid"
+  aria-rowcount={items.length}
+  onscroll={onScroll}
+>
+  {#if items.length > 0}
+    <div class="spacer" style="height:{totalHeight}px">
+      {#each sections as sec (sec.key)}
+        <section class="group" style="height:{sec.height}px; translate:0 {sec.top}px">
+          {#if sec.header}
+            <div class="group-header">{sec.header}</div>
+          {/if}
+          {#each sec.cards as c (c.item.id)}
+            <Card
+              item={c.item}
+              selected={selectedIds.has(c.item.id)}
+              focused={c.item.id === focusedId}
+              zoom={z}
+              showAge={showAge}
+              formatLabelSize={labelSize}
+              style="position:absolute; left:0; top:0; width:{tileW}px; height:{tileH}px; translate:{c.x}px {c.y}px"
+              onactivate={onactivate}
+              oncontextmenu={oncontextmenu}
+              ontoggle={ontoggle}
+            />
+          {/each}
+        </section>
+      {/each}
+    </div>
+  {/if}
+</div>
+
+<style>
+  .grid {
+    position: relative;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    contain: layout paint;
+  }
+
+  .spacer {
+    position: relative;
+    width: 100%;
+  }
+
+  .group {
+    position: static;
+  }
+
+  .group-header {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    height: var(--group-header-h);
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: var(--text-2);
+    background: color-mix(in srgb, var(--bg-0) 62%, transparent);
+    backdrop-filter: blur(var(--glass-blur));
+    user-select: none;
+    -webkit-user-select: none;
+  }
+</style>

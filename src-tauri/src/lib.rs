@@ -60,7 +60,16 @@ pub fn run() {
 
             let _log_guard = logging::init(&resolved.store_root().join("logs"));
 
-            let store = Arc::new(Store::open(&resolved.store_root())?);
+            let store_root = resolved.store_root();
+
+            // tauri.conf.json scopes the asset protocol to the default store
+            // under %APPDATA%. A relocated store lives somewhere else, so widen
+            // the scope at runtime or every thumbnail silently fails to load.
+            if let Err(e) = handle.asset_protocol_scope().allow_directory(&store_root, true) {
+                tracing::warn!("could not grant asset access to {}: {e}", store_root.display());
+            }
+
+            let store = Arc::new(Store::open(&store_root)?);
 
             let emit_handle = handle.clone();
             let clipboard = Arc::new(ClipboardWatcher::start(
@@ -95,6 +104,7 @@ pub fn run() {
             commands::search_items,
             commands::get_item_blob_url,
             commands::get_extension_facets,
+            commands::get_tab_counts,
             commands::get_storage_stats,
             commands::copy_to_clipboard,
             commands::paste_to_previous_window,
@@ -114,6 +124,7 @@ pub fn run() {
             commands::import_data,
             commands::set_capture_enabled,
             commands::run_cleanup_now,
+            commands::clear_history,
             commands::hide_popup,
             commands::show_settings_window,
             commands::popup_ready,

@@ -1,10 +1,6 @@
 -- Rebuffer store schema, v1
 -- SQLite 3.38+ with FTS5. Apply once at first run; later changes go in migrations/.
 
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous  = NORMAL;
-PRAGMA foreign_keys = ON;
-
 -- ---------------------------------------------------------------------------
 -- items: one row per clipboard entry
 -- ---------------------------------------------------------------------------

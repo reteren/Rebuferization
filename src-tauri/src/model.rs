@@ -169,6 +169,20 @@ pub struct StorageStats {
     pub cap_bytes: Option<i64>,
 }
 
+/// Item counts per popup tab. Derived counts would be wrong: `links` is a
+/// sub_kind rather than a kind, `pinned` cuts across every kind, and extension
+/// facets miss items with no extension — so the store counts them in SQL.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TabCounts {
+    pub all: i64,
+    pub images: i64,
+    pub text: i64,
+    pub links: i64,
+    pub files: i64,
+    pub pinned: i64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanupResult {
@@ -181,6 +195,18 @@ pub struct CleanupResult {
 pub enum ImportMode {
     Merge,
     Replace,
+}
+
+/// Payload of the `storage-warning` event. Typed, because the frontend shows
+/// real numbers in the toast rather than a prebaked sentence.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageWarning {
+    pub used_bytes: i64,
+    pub cap_bytes: i64,
+    /// Zero when this is the 90% warning fired before anything is deleted.
+    pub removed_items: i64,
+    pub freed_bytes: i64,
 }
 
 /// Payload of the `store-progress` event during a relocation / import / export.

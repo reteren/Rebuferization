@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::AppResult;
 use crate::model::{
-    events, CleanupResult, Facet, Filter, ImportMode, ItemDto, Sort, StorageStats,
+    events, CleanupResult, Facet, Filter, ImportMode, ItemDto, Sort, StorageStats, TabCounts,
 };
 use crate::settings::Settings;
 use crate::AppState;
@@ -51,6 +51,11 @@ pub fn get_item_blob_url(state: State<'_, AppState>, id: i64) -> AppResult<Strin
 #[tauri::command]
 pub fn get_extension_facets(state: State<'_, AppState>, filter: Filter) -> AppResult<Vec<Facet>> {
     state.store.ext_facets(&filter)
+}
+
+#[tauri::command]
+pub fn get_tab_counts(state: State<'_, AppState>) -> AppResult<TabCounts> {
+    state.store.tab_counts()
 }
 
 #[tauri::command]
@@ -167,7 +172,13 @@ pub fn update_settings(
 
 #[tauri::command]
 pub fn relocate_store(app: AppHandle, state: State<'_, AppState>, path: String) -> AppResult<()> {
-    crate::store::janitor::relocate(&app, &state.store, std::path::Path::new(&path))
+    let target = std::path::PathBuf::from(&path);
+    // Grant asset access before the move, not after: the frontend may request a
+    // thumbnail the moment relocation finishes.
+    if let Err(e) = app.asset_protocol_scope().allow_directory(&target, true) {
+        tracing::warn!("could not grant asset access to {}: {e}", target.display());
+    }
+    crate::store::janitor::relocate(&app, &state.store, &target)
 }
 
 #[tauri::command]
@@ -198,6 +209,19 @@ pub fn run_cleanup_now(
     older_than_days: Option<u32>,
 ) -> AppResult<CleanupResult> {
     state.store.run_cleanup(older_than_days)
+}
+
+/// The Data tab's Reset. Distinct from `run_cleanup_now`, which is the janitor
+/// and deliberately spares pinned items and shelf references.
+#[tauri::command]
+pub fn clear_history(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    include_pinned: bool,
+) -> AppResult<CleanupResult> {
+    let result = state.store.clear_history(include_pinned)?;
+    let _ = app.emit(events::ITEMS_DELETED, Vec::<i64>::new());
+    Ok(result)
 }
 
 #[tauri::command]

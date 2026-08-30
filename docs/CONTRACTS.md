@@ -48,6 +48,10 @@ renders. `src/routes/Popup.svelte` (W6) is where the two meet.
 { item: ItemDto, selected: boolean, focused: boolean, zoom: number,
   showAge: boolean, formatLabelSize: 'off'|'small'|'medium'|'large' }
 // events: onactivate(item), oncontextmenu(item, x, y), ontoggle(item, mode:'single'|'ctrl'|'shift')
+// The root element carries `draggable="true"` and `data-id={item.id}`. Card
+// itself has NO dragstart handler: W6 delegates one listener on the grid
+// viewport, reads data-id, and hands off to the Rust `begin_drag`, which owns
+// the real OLE drag. One listener beats 10,000.
 
 // Grid.svelte — virtualized; renders group headers itself when `grouped`
 { items: ItemDto[], zoom: number, grouped: boolean,

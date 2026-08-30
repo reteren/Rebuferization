@@ -59,6 +59,18 @@ export interface Facet {
   count: number
 }
 
+/// Counts for the tab bar. Not derivable on the client: `links` is a sub-kind,
+/// `pinned` cuts across every kind, and extension facets miss items with no
+/// extension — so the store counts them in one query.
+export interface TabCounts {
+  all: number
+  images: number
+  text: number
+  links: number
+  files: number
+  pinned: number
+}
+
 export interface KindStat {
   kind: string
   count: number
@@ -79,6 +91,15 @@ export interface CleanupResult {
 }
 
 export type ImportMode = 'merge' | 'replace'
+
+/// Payload of the `storage-warning` event. `removedItems` is 0 for the 90%
+/// warning fired before anything is deleted.
+export interface StorageWarning {
+  usedBytes: number
+  capBytes: number
+  removedItems: number
+  freedBytes: number
+}
 
 export interface StoreProgress {
   phase: string
