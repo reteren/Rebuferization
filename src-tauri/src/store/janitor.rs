@@ -235,6 +235,47 @@ for h in handles {
         }
     }
 
+    // Part 4: rows whose THUMBNAIL is missing. The row is not deleted — the
+    // item and its blob are intact and losing a real capture over a missing
+    // preview would be absurd — so the column is cleared and the card falls
+    // back to the placeholder a thumbnail-less item already uses. Without this
+    // the card asks for a file that is not there and renders a broken image
+    // forever. The thumbs directory is flat and the walk above has already
+    // removed orphans, so one read_dir gives an accurate set.
+    {
+        let mut existing_thumbs: HashSet<String> = HashSet::new();
+        if let Ok(rd) = std::fs::read_dir(blobs_dir.join("thumbs")) {
+            for entry in rd.flatten() {
+                existing_thumbs.insert(entry.file_name().to_string_lossy().to_string());
+            }
+        }
+
+        let mut stmt =
+            conn_guard.prepare("SELECT id, thumb_path FROM items WHERE thumb_path IS NOT NULL")?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        let orphaned: Vec<i64> = rows
+            .into_iter()
+            .filter(|(_, t)| !existing_thumbs.contains(t.as_str()))
+            .map(|(id, _)| id)
+            .collect();
+
+        if !orphaned.is_empty() {
+            tracing::warn!(
+                "Startup integrity sweep: clearing {} thumb_path values whose file is gone",
+                orphaned.len()
+            );
+            for id in orphaned {
+                let _ = conn_guard
+                    .execute("UPDATE items SET thumb_path = NULL WHERE id = ?1", [id]);
+            }
+        }
+    }
+
     Ok(())
 }
 

@@ -666,4 +666,70 @@ fn test_regression_finding_8_fsync_lock_concurrency() {
     assert!(elapsed.as_millis() < 500);
 }
 
+/// The sweep must clear a thumb_path whose file is gone WITHOUT deleting the
+/// row: the capture and its blob are intact, and losing a real item over a
+/// missing preview would be absurd. Left uncleared, the card asks for a file
+/// that is not there and renders a broken image forever.
+#[test]
+fn test_sweep_clears_missing_thumb_without_losing_the_item() {
+    let dir = tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
 
+    let png = {
+        let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 120, 200, 255]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        buf.into_inner()
+    };
+
+    let mut cap = Capture::text("placeholder");
+    cap.kind = Kind::Image;
+    cap.sub_kind = None;
+    cap.primary = Some(png);
+    cap.ext = Some("PNG".into());
+    cap.mime = Some("image/png".into());
+    cap.preview_text = None;
+    let item = store.insert_capture(cap).unwrap();
+
+    let before = store.get(item.id).unwrap();
+    assert!(before.thumb_url.is_some(), "the fixture needs a thumbnail to remove");
+
+    // Thumbnails are encoded on a background worker, so wait for the file to
+    // exist before removing it — deleting first only races the writer and
+    // proves nothing.
+    let thumbs = dir.path().join("blobs").join("thumbs");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let present = std::fs::read_dir(&thumbs)
+            .map(|rd| rd.flatten().count())
+            .unwrap_or(0);
+        if present > 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the thumbnail worker never wrote a file"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
+    // Now remove it behind the store's back, as a prune or a crash between the
+    // blob write and the thumbnail write would.
+    for entry in std::fs::read_dir(&thumbs).unwrap().flatten() {
+        std::fs::remove_file(entry.path()).unwrap();
+    }
+
+    drop(store);
+    let store = Store::open(dir.path()).unwrap();
+
+    let after = store.get(item.id).unwrap();
+    assert!(
+        after.thumb_url.is_none(),
+        "thumb_url must be cleared once its file is gone, not left pointing at nothing"
+    );
+    assert_eq!(
+        store.list(&Filter::default(), Sort::Newest, 0, 10).unwrap().len(),
+        1,
+        "the item itself must survive: only the preview was lost"
+    );
+}
