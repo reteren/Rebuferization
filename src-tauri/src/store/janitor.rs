@@ -188,6 +188,14 @@ pub fn run_cleanup_with_app(
             let expired_ids: Vec<i64> = expired.iter().map(|(id, _)| *id).collect();
             let expired_bytes: i64 = expired.iter().map(|(_, bytes)| *bytes).sum();
             queries::delete_items(&mut conn, &root, &expired_ids)?;
+
+            // The UI removes cards on `items-deleted`. Without this the janitor
+            // prunes rows out from under an open popup and the cards stay on
+            // screen until the next reload — clicking one then copies an item
+            // that no longer exists.
+            if let Some(a) = app {
+                let _ = a.emit(events::ITEMS_DELETED, &expired_ids);
+            }
             removed_items += expired_ids.len() as i64;
             freed_bytes += expired_bytes;
         }
@@ -252,6 +260,12 @@ pub fn run_cleanup_with_app(
                 queries::delete_items(&mut conn, &root, &prune_ids)?;
                 removed_items += prune_ids.len() as i64;
                 freed_bytes += prune_bytes;
+
+                // Same reason as the age sweep above: the cap can fire while
+                // the popup is open.
+                if let Some(a) = app {
+                    let _ = a.emit(events::ITEMS_DELETED, &prune_ids);
+                }
 
                 if let Some(a) = app {
                     let _ = a.emit(
