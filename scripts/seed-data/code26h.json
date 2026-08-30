@@ -1,0 +1,11 @@
+{
+  "schema": "rebuffer-seed",
+  "version": 1,
+  "items": [
+    { "kind": "text", "note": "seed for the code sub-kind preview" },
+    { "kind": "text", "note": "this line exists so the block is taller than one screen" },
+    { "kind": "image", "note": "not actually stored, just structure" }
+  ],
+  "retentionDays": 30,
+  "maxStoreBytes": null
+}

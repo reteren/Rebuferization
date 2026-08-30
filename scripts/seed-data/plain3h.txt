@@ -1,0 +1,1 @@
+Meeting notes: W17 measurement run, owner is the perf worker. Deliverables are the latency figure in DECISIONS.md, runtime numbers in PERF.md, and an honest rendering verdict for the popup.
