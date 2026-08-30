@@ -162,8 +162,8 @@ pub fn write_thumbnail(root: &Path, hash: &str, data: &[u8]) -> AppResult<Option
     Ok(Some(thumb_filename))
 }
 
-/// Checks derived refcount for `hash` and deletes the on-disk blob and thumbnail
-/// only if the count reaches 0.
+/// Checks derived refcount for `hash` across both `items` and `item_formats`,
+/// deleting the on-disk blob and thumbnail only if the count reaches 0.
 pub fn delete_blob_if_unreferenced(
     conn: &Connection,
     root: &Path,
@@ -171,13 +171,27 @@ pub fn delete_blob_if_unreferenced(
     blob_path: Option<&str>,
     thumb_path: Option<&str>,
 ) -> AppResult<bool> {
-    let count: i64 = conn.query_row(
+    let count_items: i64 = conn.query_row(
         "SELECT COUNT(*) FROM items WHERE hash = ?1",
         [hash],
         |r| r.get(0),
     )?;
 
-    if count == 0 {
+    let count_formats: i64 = if let Some(rel) = blob_path {
+        conn.query_row(
+            "SELECT COUNT(*) FROM item_formats WHERE blob_path = ?1",
+            [rel],
+            |r| r.get(0),
+        )?
+    } else {
+        conn.query_row(
+            "SELECT COUNT(*) FROM item_formats WHERE blob_path LIKE ?1",
+            [format!("%{}", hash)],
+            |r| r.get(0),
+        )?
+    };
+
+    if count_items + count_formats == 0 {
         if let Some(rel) = blob_path {
             let full_path = root.join("blobs").join(rel);
             if full_path.exists() {

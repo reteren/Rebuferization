@@ -5,11 +5,17 @@
 //! Do not change field names or defaults without updating `types.ts` and
 //! `docs/SPEC.md` §7 in the same change.
 
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 pub const CURRENT_VERSION: u32 = 1;
 
@@ -200,29 +206,645 @@ pub fn default_store_root() -> PathBuf {
     dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("Rebuffer")
 }
 
+// ---------------------------------------------------------------------------
+// validation & sanitization
+// ---------------------------------------------------------------------------
+
+const SIZE_MODES: &[&str] = &["percent", "fixed"];
+const LABEL_SIZES: &[&str] = &["off", "small", "medium", "large"];
+
+/// `#RGB`, `#RRGGBB` or `#RRGGBBAA`.
+fn is_valid_hex(s: &str) -> bool {
+    let b = s.as_bytes();
+    (b.len() == 4 || b.len() == 7 || b.len() == 9)
+        && b[0] == b'#'
+        && b[1..].iter().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Post-deserialization clamp. Sanitization at the JSON level happens first
+/// (`sanitize_json`); this catches anything the type system let through.
+pub fn validate(s: &mut Settings) {
+    s.storage.retention_days = s.storage.retention_days.clamp(1, 30);
+    s.window.zoom_step = s.window.zoom_step.clamp(1, 5);
+    s.window.percent_of_monitor = s.window.percent_of_monitor.clamp(10, 100);
+    if !is_valid_hex(&s.appearance.accent) {
+        s.appearance.accent = AppearanceSettings::default().accent;
+    }
+    if !SIZE_MODES.contains(&s.window.size_mode.as_str()) {
+        s.window.size_mode = WindowSettings::default().size_mode;
+    }
+    if !LABEL_SIZES.contains(&s.appearance.format_label_size.as_str()) {
+        s.appearance.format_label_size = AppearanceSettings::default().format_label_size;
+    }
+}
+
+/// Rewrites a `settings.json`-shaped `Value` so that a deserialization into
+/// `Settings` can never fail and out-of-range values are clamped rather than
+/// rejected: wrong-typed fields are dropped (their default applies), numbers
+/// are clamped into their documented ranges, and enum-like strings fall back
+/// to their default. One bad field never costs the user every other setting.
+fn sanitize_json(v: &mut Value) {
+    if !v.is_object() {
+        *v = Value::Object(Map::new());
+        return;
+    }
+    let root = v.as_object_mut().expect("checked above");
+
+    if !matches!(root.get("version"), Some(Value::Number(_))) {
+        root.remove("version");
+    }
+
+    sanitize_section(root, "hotkey", |o| {
+        require_bool(o, "aggressiveMode");
+        require_string(o, "binding");
+    });
+
+    sanitize_section(root, "storage", |o| {
+        require_string(o, "path");
+        clamp_number(o, "retentionDays", 1.0, 30.0);
+        require_number(o, "maxItemBytes");
+        require_number_or_null(o, "maxStoreBytes");
+        require_bool(o, "notifyWhenFull");
+    });
+
+    sanitize_section(root, "window", |o| {
+        require_one_of(o, "sizeMode", SIZE_MODES, &WindowSettings::default().size_mode);
+        clamp_number(o, "percentOfMonitor", 10.0, 100.0);
+        clamp_number(o, "zoomStep", 1.0, 5.0);
+        sanitize_section(o, "fixed", |f| {
+            require_number(f, "width");
+            require_number(f, "height");
+        });
+    });
+
+    sanitize_section(root, "behavior", |o| {
+        for key in ["autoPaste", "pasteAsPlainText", "closeOnCopy", "launchOnStartup", "silentStart", "captureEnabled"] {
+            require_bool(o, key);
+        }
+    });
+
+    sanitize_section(root, "appearance", |o| {
+        require_bool(o, "showAge");
+        require_one_of(o, "formatLabelSize", LABEL_SIZES, &AppearanceSettings::default().format_label_size);
+        require_bool(o, "animateGifs");
+        require_bool(o, "reduceMotion");
+        match o.get_mut("accent") {
+            Some(Value::String(s)) if is_valid_hex(s) => {}
+            _ => {
+                o.insert(
+                    "accent".into(),
+                    Value::String(AppearanceSettings::default().accent),
+                );
+            }
+        }
+    });
+
+    sanitize_section(root, "privacy", |o| {
+        require_bool(o, "respectClipboardFlags");
+        match o.get_mut("blockedProcesses") {
+            Some(Value::Array(items)) => items.retain(Value::is_string),
+            _ => {
+                o.remove("blockedProcesses");
+            }
+        }
+    });
+}
+
+fn sanitize_section(obj: &mut Map<String, Value>, key: &str, f: impl FnOnce(&mut Map<String, Value>)) {
+    match obj.get_mut(key) {
+        Some(Value::Object(o)) => f(o),
+        Some(_) => {
+            obj.remove(key);
+        }
+        None => {}
+    }
+}
+
+fn require_bool(obj: &mut Map<String, Value>, key: &str) {
+    match obj.get_mut(key) {
+        Some(Value::Bool(_)) => {}
+        Some(_) => {
+            obj.remove(key);
+        }
+        None => {}
+    }
+}
+
+fn require_string(obj: &mut Map<String, Value>, key: &str) {
+    match obj.get_mut(key) {
+        Some(Value::String(_)) => {}
+        Some(_) => {
+            obj.remove(key);
+        }
+        None => {}
+    }
+}
+
+fn require_number(obj: &mut Map<String, Value>, key: &str) {
+    match obj.get_mut(key) {
+        Some(Value::Number(_)) => {}
+        Some(_) => {
+            obj.remove(key);
+        }
+        None => {}
+    }
+}
+
+fn require_number_or_null(obj: &mut Map<String, Value>, key: &str) {
+    match obj.get_mut(key) {
+        Some(Value::Number(_)) | Some(Value::Null) => {}
+        Some(_) => {
+            obj.remove(key);
+        }
+        None => {}
+    }
+}
+
+/// Clamps a numeric field into `[lo, hi]`; a wrong-typed field is dropped so
+/// the struct-level serde default applies.
+fn clamp_number(obj: &mut Map<String, Value>, key: &str, lo: f64, hi: f64) {
+    match obj.get_mut(key) {
+        Some(Value::Number(n)) => {
+            if let Some(f) = n.as_f64() {
+                obj.insert(key.into(), Value::from(f.clamp(lo, hi) as u64));
+            }
+        }
+        Some(_) => {
+            obj.remove(key);
+        }
+        None => {}
+    }
+}
+
+/// Replaces an enum-like string field with the field's documented default if
+/// it is not one of the allowed values, or drops it entirely if it is not a
+/// string (the struct-level serde default then applies). The fallback must
+/// never be "the first variant" — an invalid value must restore the default,
+/// not silently pick whichever variant happens to head the match.
+fn require_one_of(obj: &mut Map<String, Value>, key: &str, allowed: &[&str], fallback: &str) {
+    match obj.get_mut(key) {
+        Some(Value::String(s)) => {
+            if !allowed.contains(&s.as_str()) {
+                obj.insert(key.into(), Value::String(fallback.into()));
+            }
+        }
+        Some(_) => {
+            obj.remove(key);
+        }
+        None => {}
+    }
+}
+
+/// Recursive JSON merge, roughly RFC 7396 without the null-means-delete rule:
+/// objects merge key-wise, every other value replaces. `null` patches replace
+/// the target (which is how `maxStoreBytes` is unset).
+pub fn merge_into(base: &mut Value, patch: Value) {
+    match (base, patch) {
+        (Value::Object(base), Value::Object(patch)) => {
+            for (key, value) in patch {
+                match base.get_mut(&key) {
+                    Some(existing) => merge_into(existing, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, patch) => *base = patch,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// storage
+// ---------------------------------------------------------------------------
+
+struct State {
+    settings: Settings,
+    /// mtime of the file as we last saw it; the watcher reloads when it differs.
+    file_mtime: Option<SystemTime>,
+}
+
 /// Holds the current settings and the file watcher behind them.
-pub struct SettingsStore;
+pub struct SettingsStore {
+    path: PathBuf,
+    state: Arc<Mutex<State>>,
+}
+
+fn file_mtime(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Writes `settings.json` atomically: temp file in the same directory, fsync,
+/// then rename over the target (which replaces on Windows).
+fn write_atomic(path: &Path, settings: &Settings) -> AppResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec_pretty(settings)?;
+    let mut f = fs::File::create(&tmp)?;
+    f.write_all(&bytes)?;
+    f.sync_all()?;
+    drop(f);
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
 
 impl SettingsStore {
     /// Reads `settings.json`, falling back to defaults for anything missing or
     /// out of range, and starts watching the file for external edits.
-    pub fn load(_path: &Path) -> AppResult<SettingsStore> {
-        todo!("W4")
+    ///
+    /// A missing file is not an error: the defaults are written so the user
+    /// can inspect them. A corrupt file is also not an error: defaults are
+    /// used in memory but the file is left untouched until the next `patch`.
+    pub fn load(path: &Path) -> AppResult<SettingsStore> {
+        let (settings, mtime) = match fs::read(path) {
+            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                Ok(mut value) => {
+                    sanitize_json(&mut value);
+                    match serde_json::from_value::<Settings>(value) {
+                        Ok(mut s) => {
+                            validate(&mut s);
+                            (s, file_mtime(path))
+                        }
+                        Err(e) => {
+                            tracing::warn!("settings.json is unreadable, using defaults: {e}");
+                            (Settings::default(), None)
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("settings.json is not valid JSON, using defaults: {e}");
+                    (Settings::default(), None)
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let s = Settings::default();
+                write_atomic(path, &s)?;
+                (s, file_mtime(path))
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        let state = Arc::new(Mutex::new(State { settings, file_mtime: mtime }));
+        let store = SettingsStore { path: path.to_path_buf(), state: state.clone() };
+
+        // Hot reload: a plain mtime poll, deliberately not a filesystem-watcher
+        // crate — this is a settings file, not a build system. The `file_mtime`
+        // we record on every write of our own is what lets us skip reloads of
+        // our own edits.
+        let watch_path = path.to_path_buf();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let current = file_mtime(&watch_path);
+            let mut st = state.lock();
+            if current == st.file_mtime {
+                continue;
+            }
+            if let Ok(bytes) = fs::read(&watch_path) {
+                if let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) {
+                    sanitize_json(&mut value);
+                    if let Ok(mut s) = serde_json::from_value::<Settings>(value) {
+                        validate(&mut s);
+                        st.settings = s;
+                    }
+                }
+            }
+            st.file_mtime = current;
+        });
+
+        Ok(store)
     }
 
     pub fn get(&self) -> Settings {
-        todo!("W4")
+        self.state.lock().settings.clone()
     }
 
     /// Merges a partial JSON patch, validates, saves atomically, and returns
     /// the result. Callers emit `settings-changed` afterwards.
-    pub fn patch(&self, _patch: serde_json::Value) -> AppResult<Settings> {
-        todo!("W4")
+    pub fn patch(&self, patch: Value) -> AppResult<Settings> {
+        if !patch.is_object() {
+            return Err(AppError::Other("settings patch must be a JSON object".into()));
+        }
+        let mut st = self.state.lock();
+
+        let mut merged = serde_json::to_value(&st.settings)?;
+        merge_into(&mut merged, patch);
+        sanitize_json(&mut merged);
+        let mut next: Settings = serde_json::from_value(merged)?;
+        validate(&mut next);
+
+        let behavior_changed = st.settings.behavior.launch_on_startup != next.behavior.launch_on_startup
+            || st.settings.behavior.silent_start != next.behavior.silent_start;
+
+        write_atomic(&self.path, &next)?;
+        st.settings = next.clone();
+        st.file_mtime = file_mtime(&self.path);
+
+        if behavior_changed {
+            apply_autostart(&next.behavior);
+        }
+        Ok(next)
     }
 
     /// Clamps out-of-range values instead of rejecting the whole file, so one
     /// bad field never costs the user every other setting.
-    pub fn validate(_s: &mut Settings) {
-        todo!("W4")
+    pub fn validate(s: &mut Settings) {
+        validate(s)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// autostart wiring
+// ---------------------------------------------------------------------------
+
+type AutostartHook = Box<dyn Fn(&BehaviorSettings) + Send + Sync>;
+
+/// Registered once at startup (by the tray installer, which holds the
+/// `AppHandle`); `patch` calls it when `launchOnStartup` or `silentStart`
+/// changes so the HKCU Run key follows the setting.
+static AUTOSTART_HOOK: once_cell::sync::Lazy<Mutex<Option<AutostartHook>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+
+pub fn set_autostart_hook<F>(hook: F)
+where
+    F: Fn(&BehaviorSettings) + Send + Sync + 'static,
+{
+    *AUTOSTART_HOOK.lock() = Some(Box::new(hook));
+}
+
+/// Applies the current startup behavior through the registered hook (if any).
+pub fn apply_autostart(behavior: &BehaviorSettings) {
+    if let Some(hook) = AUTOSTART_HOOK.lock().as_ref() {
+        hook(behavior);
+    }
+}
+
+/// Reads just the behavior section from disk, sanitized, for callers that
+/// need the startup state before the store is managed (the tray installer).
+pub fn peek_behavior() -> BehaviorSettings {
+    let path = default_store_root().join("settings.json");
+    let value = fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    let Some(mut value) = value else { return BehaviorSettings::default() };
+    sanitize_json(&mut value);
+    serde_json::from_value::<Settings>(value)
+        .map(|mut s| {
+            validate(&mut s);
+            s.behavior
+        })
+        .unwrap_or_default()
+}
+
+/// The `tauri-plugin-autostart` run key always carries `--silent` because its
+/// args are fixed at plugin init; when `silentStart` is off this rewrites the
+/// value without it. Uses the registry directly (the `Win32_System_Registry`
+/// feature is enabled transitively by the autostart plugin's `winreg`).
+pub fn rewrite_run_value(app_name: &str, silent: bool) -> AppResult<()> {
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ,
+    };
+    use windows::core::{w, PCWSTR};
+
+    let mut value = format!("\"{}\"", std::env::current_exe()?.display());
+    if silent {
+        value.push_str(" --silent");
+    }
+
+    let name = wide(app_name);
+    let data: Vec<u8> = wide(&value)
+        .into_iter()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    let mut hkey = HKEY::default();
+    unsafe {
+        let err = RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            None,
+            KEY_SET_VALUE,
+            &mut hkey,
+        );
+        if err.0 != 0 {
+            return Err(AppError::Win(format!(
+                "RegOpenKeyExW(Run) failed: {}",
+                err.0
+            )));
+        }
+        let err = RegSetValueExW(hkey, PCWSTR(name.as_ptr()), None, REG_SZ, Some(&data));
+        if err.0 != 0 {
+            let _ = RegCloseKey(hkey);
+            return Err(AppError::Win(format!("RegSetValueExW failed: {}", err.0)));
+        }
+        let _ = RegCloseKey(hkey);
+    }
+    Ok(())
+}
+
+/// NUL-terminated UTF-16, for `PCWSTR` parameters.
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sanitized(v: Value) -> Value {
+        let mut v = v;
+        sanitize_json(&mut v);
+        v
+    }
+
+    fn as_settings(v: Value) -> Settings {
+        let mut s: Settings = serde_json::from_value(v).expect("sanitized json must deserialize");
+        validate(&mut s);
+        s
+    }
+
+    #[test]
+    fn clamps_retention_days() {
+        let v = sanitized(json!({ "storage": { "retentionDays": 45 } }));
+        let s = as_settings(v);
+        assert_eq!(s.storage.retention_days, 30);
+        let v = sanitized(json!({ "storage": { "retentionDays": 0 } }));
+        assert_eq!(as_settings(v).storage.retention_days, 1);
+    }
+
+    #[test]
+    fn clamps_zoom_step() {
+        let v = sanitized(json!({ "window": { "zoomStep": 9 } }));
+        assert_eq!(as_settings(v).window.zoom_step, 5);
+        let v = sanitized(json!({ "window": { "zoomStep": 0 } }));
+        assert_eq!(as_settings(v).window.zoom_step, 1);
+    }
+
+    #[test]
+    fn clamps_percent_of_monitor() {
+        let v = sanitized(json!({ "window": { "percentOfMonitor": 250 } }));
+        assert_eq!(as_settings(v).window.percent_of_monitor, 100);
+        let v = sanitized(json!({ "window": { "percentOfMonitor": 3 } }));
+        assert_eq!(as_settings(v).window.percent_of_monitor, 10);
+    }
+
+    #[test]
+    fn valid_range_values_pass_through() {
+        let v = sanitized(json!({
+            "storage": { "retentionDays": 17 },
+            "window": { "zoomStep": 3, "percentOfMonitor": 42 }
+        }));
+        let s = as_settings(v);
+        assert_eq!(s.storage.retention_days, 17);
+        assert_eq!(s.window.zoom_step, 3);
+        assert_eq!(s.window.percent_of_monitor, 42);
+    }
+
+    #[test]
+    fn accent_falls_back_to_default() {
+        let v = sanitized(json!({ "appearance": { "accent": "hotpink" } }));
+        assert_eq!(as_settings(v).appearance.accent, "#7aa2ff");
+        let v = sanitized(json!({ "appearance": { "accent": 42 } }));
+        assert_eq!(as_settings(v).appearance.accent, "#7aa2ff");
+    }
+
+    #[test]
+    fn accent_accepts_valid_hex_forms() {
+        for hex in ["#fff", "#7aa2ff", "#7aa2ffcc"] {
+            let v = sanitized(json!({ "appearance": { "accent": hex } }));
+            assert_eq!(as_settings(v).appearance.accent, hex);
+        }
+    }
+
+    #[test]
+    fn wrong_typed_field_falls_back_not_dies() {
+        let v = sanitized(json!({ "storage": { "retentionDays": "thirty", "notifyWhenFull": false } }));
+        let s = as_settings(v);
+        assert_eq!(s.storage.retention_days, 30);
+        assert!(!s.storage.notify_when_full, "healthy sibling field must survive");
+    }
+
+    #[test]
+    fn one_bad_field_keeps_everything_else() {
+        let v = sanitized(json!({
+            "hotkey": { "binding": "Alt+V", "aggressiveMode": "yes" },
+            "storage": { "retentionDays": 99, "path": 12, "maxStoreBytes": "lots" },
+            "behavior": { "launchOnStartup": true, "silentStart": true }
+        }));
+        let s = as_settings(v);
+        assert_eq!(s.hotkey.binding, "Alt+V");
+        assert!(!s.hotkey.aggressive_mode);
+        assert_eq!(s.storage.retention_days, 30);
+        assert!(s.storage.path.is_empty());
+        assert_eq!(s.storage.max_store_bytes, None);
+        assert!(s.behavior.launch_on_startup);
+        assert!(s.behavior.silent_start);
+    }
+
+    #[test]
+    fn bad_section_type_is_dropped() {
+        let v = sanitized(json!({ "appearance": "pretty" }));
+        let s = as_settings(v);
+        assert!(s.appearance.show_age);
+        assert_eq!(s.appearance.format_label_size, "medium");
+    }
+
+    #[test]
+    fn enum_strings_fall_back() {
+        let v = sanitized(json!({ "window": { "sizeMode": "gigantic" } }));
+        assert_eq!(as_settings(v).window.size_mode, "percent");
+        let v = sanitized(json!({ "appearance": { "formatLabelSize": "huge" } }));
+        assert_eq!(as_settings(v).appearance.format_label_size, "medium");
+    }
+
+    #[test]
+    fn non_object_root_becomes_defaults() {
+        let v = sanitized(json!([1, 2, 3]));
+        let s: Settings = serde_json::from_value(v).expect("must deserialize");
+        assert_eq!(s.storage.retention_days, 30);
+        assert_eq!(s.hotkey.binding, "Alt+V");
+    }
+
+    #[test]
+    fn blocked_processes_keeps_only_strings() {
+        let v = sanitized(json!({ "privacy": { "blockedProcesses": ["keepass.exe", 7, null] } }));
+        assert_eq!(as_settings(v).privacy.blocked_processes, vec!["keepass.exe"]);
+        let v = sanitized(json!({ "privacy": { "blockedProcesses": "keepass.exe" } }));
+        assert_eq!(as_settings(v).privacy.blocked_processes, PrivacySettings::default().blocked_processes);
+    }
+
+    #[test]
+    fn merge_is_recursive_and_replaces_arrays() {
+        let mut base = json!({
+            "behavior": { "launchOnStartup": true, "silentStart": true },
+            "appearance": { "accent": "#7aa2ff" },
+            "privacy": { "blockedProcesses": ["keepass.exe"] }
+        });
+        let patch = json!({
+            "behavior": { "silentStart": false },
+            "privacy": { "blockedProcesses": ["bitwarden.exe"] },
+            "storage": { "maxStoreBytes": null }
+        });
+        merge_into(&mut base, patch);
+        assert_eq!(base["behavior"]["launchOnStartup"], true);
+        assert_eq!(base["behavior"]["silentStart"], false);
+        assert_eq!(base["appearance"]["accent"], "#7aa2ff");
+        assert_eq!(base["privacy"]["blockedProcesses"], json!(["bitwarden.exe"]));
+        assert_eq!(base["storage"]["maxStoreBytes"], Value::Null);
+    }
+
+    #[test]
+    fn merge_replaces_non_object_values() {
+        let mut base = json!({ "version": 1 });
+        merge_into(&mut base, json!({ "version": 2 }));
+        assert_eq!(base["version"], 2);
+    }
+
+    #[test]
+    fn patch_round_trip_on_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        let store = SettingsStore::load(&path).expect("load");
+        let patched = store
+            .patch(json!({ "window": { "zoomStep": 9 }, "appearance": { "accent": "#00ff00" } }))
+            .expect("patch");
+        assert_eq!(patched.window.zoom_step, 5, "patch is clamped too");
+        assert_eq!(patched.appearance.accent, "#00ff00");
+
+        let on_disk: Value =
+            serde_json::from_slice(&fs::read(&path).expect("file exists")).expect("valid json");
+        assert_eq!(on_disk["window"]["zoomStep"], 5);
+        assert_eq!(on_disk["appearance"]["accent"], "#00ff00");
+        assert!(!path.with_extension("json.tmp").exists(), "no temp file left behind");
+    }
+
+    #[test]
+    fn missing_file_writes_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        let store = SettingsStore::load(&path).expect("load");
+        assert_eq!(store.get().storage.retention_days, 30);
+        assert!(path.exists(), "defaults must be materialized");
+    }
+
+    #[test]
+    fn patch_must_be_an_object() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        let store = SettingsStore::load(&path).expect("load");
+        assert!(store.patch(json!(42)).is_err());
+    }
+
+    #[test]
+    fn validate_clamps_struct_directly() {
+        let mut s = Settings::default();
+        s.storage.retention_days = 0;
+        s.window.zoom_step = 42;
+        s.window.percent_of_monitor = 1;
+        s.appearance.accent = "red".into();
+        SettingsStore::validate(&mut s);
+        assert_eq!(s.storage.retention_days, 1);
+        assert_eq!(s.window.zoom_step, 5);
+        assert_eq!(s.window.percent_of_monitor, 10);
+        assert_eq!(s.appearance.accent, "#7aa2ff");
     }
 }

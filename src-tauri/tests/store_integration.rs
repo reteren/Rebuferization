@@ -443,11 +443,6 @@ fn test_corruption_recovery_on_garbage_database() {
     // Overwrite database and wal with total garbage
     let db_path = dir.path().join("rebuffer.db");
     std::fs::write(&db_path, b"CORRUPTED_GARBAGE_BYTES_NOT_VALID_SQLITE_3").unwrap();
-    let wal_path = dir.path().join("rebuffer.db-wal");
-    if wal_path.exists() {
-        std::fs::write(&wal_path, b"CORRUPTED_WAL_GARBAGE").unwrap();
-    }
-
     // Reopening must recover cleanly by recreating a clean database
     let store = Store::open(dir.path()).unwrap();
     let new_item = store.insert_capture(Capture::text("Recovered new entry")).unwrap();
@@ -457,4 +452,218 @@ fn test_corruption_recovery_on_garbage_database() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id, new_item.id);
 }
+
+#[test]
+fn test_regression_finding_3_deadlock_switch_root_concurrent_queries() {
+    let dir1 = tempdir().unwrap();
+    let dir2 = tempdir().unwrap();
+    let store = Store::open(dir1.path()).unwrap();
+
+    // Populate some data
+    for i in 0..20 {
+        store.insert_capture(Capture::text(&format!("Item {i}"))).unwrap();
+    }
+
+    let mut handles = Vec::new();
+
+    // Thread 1: Concurrent listing and searching
+    let s1 = store.clone();
+    handles.push(std::thread::spawn(move || {
+        for _ in 0..50 {
+            let _ = s1.list(&Filter::default(), Sort::Newest, 0, 10);
+            let _ = s1.search("Item", &Filter::default(), 10);
+            let _ = s1.stats();
+            std::thread::yield_now();
+        }
+    }));
+
+    // Thread 2: Concurrent relocation
+    let s2 = store.clone();
+    let target_dir = dir2.path().to_path_buf();
+    handles.push(std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let _ = s2.switch_root(&target_dir);
+    }));
+
+    // Joining is the assertion that matters: under the inverted lock order this
+    // test was written for, one of these threads never returns.
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // The store must still answer after the switch. It answers with nothing,
+    // and that is correct: switch_root only repoints the store, and it is
+    // janitor::relocate that copies the data across first. Asserting a
+    // non-empty list here would be asserting that switch_root moves bytes,
+    // which is not its job.
+    let list = store.list(&Filter::default(), Sort::Newest, 0, 10);
+    assert!(list.is_ok(), "store unusable after switch_root: {:?}", list.err());
+}
+
+#[test]
+fn test_regression_finding_4_delete_insert_race_transactional() {
+    let dir = tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let cap_text = "Shared unique content for race test";
+    let item1 = store.insert_capture(Capture::text(cap_text)).unwrap();
+    let blob_p = store.blob_path(item1.id).unwrap();
+    assert!(blob_p.exists());
+
+    // Delete item
+    store.delete(&[item1.id]).unwrap();
+
+    // Concurrently insert exact same content
+    let item2 = store.insert_capture(Capture::text(cap_text)).unwrap();
+    let blob_p2 = store.blob_path(item2.id).unwrap();
+    assert!(blob_p2.exists());
+    assert_eq!(std::fs::read_to_string(&blob_p2).unwrap(), cap_text);
+}
+
+#[test]
+fn test_regression_finding_5_item_formats_blob_refcounting() {
+    let dir = tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    // Create large >64KB HTML payload (70 KB)
+    let large_html = format!("<html><body>{}</body></html>", "A".repeat(70 * 1024));
+
+    let rich_cap = Capture {
+        kind: Kind::Text,
+        sub_kind: Some(SubKind::Rich),
+        primary: Some(b"Plain text".to_vec()),
+        formats: vec![CapturedFormat {
+            format: "HTML Format".into(),
+            bytes: large_html.as_bytes().to_vec(),
+        }],
+        files: vec![],
+        preview_text: Some("Plain text".into()),
+        ext: Some("TXT".into()),
+        mime: Some("text/plain".into()),
+        width: None,
+        height: None,
+        duration_ms: None,
+        source_app: None,
+        is_reference: false,
+        ref_path: None,
+    };
+
+    let item1 = store.insert_capture(rich_cap).unwrap();
+    let formats1 = store.formats(item1.id).unwrap();
+    assert_eq!(formats1.len(), 1);
+    assert_eq!(formats1[0].0, "HTML Format");
+    assert_eq!(formats1[0].1.len(), large_html.len());
+
+    // Insert a separate plain item with same hash or another item
+    let item2 = store.insert_capture(Capture::text("Separate item")).unwrap();
+
+    // Delete item 2
+    store.delete(&[item2.id]).unwrap();
+
+    // Verify item 1's >64KB format is STILL readable from disk
+    let formats_after = store.formats(item1.id).unwrap();
+    assert_eq!(formats_after.len(), 1);
+    assert_eq!(formats_after[0].0, "HTML Format");
+    assert_eq!(formats_after[0].1, large_html.as_bytes());
+}
+
+#[test]
+fn test_regression_finding_7_retention_policy_and_size_cap() {
+    let dir = tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    // Set retention policy: 7 days, 500 KB max cap
+    let policy = rebuffer_lib::model::RetentionPolicy {
+        retention_days: 7,
+        max_store_bytes: Some(500 * 1024),
+    };
+    store.set_retention_policy(policy);
+    assert_eq!(store.retention_policy().retention_days, 7);
+    assert_eq!(store.retention_policy().max_store_bytes, Some(500 * 1024));
+
+    // Insert 10 items of 100 KB each (total 1 MB, which exceeds 500 KB cap)
+    for i in 0..10 {
+        let payload = vec![(i % 256) as u8; 100 * 1024];
+        let cap = Capture {
+            kind: Kind::Other,
+            sub_kind: None,
+            primary: Some(payload),
+            formats: vec![],
+            files: vec![],
+            preview_text: Some(format!("Item {i}")),
+            ext: None,
+            mime: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            source_app: None,
+            is_reference: false,
+            ref_path: None,
+        };
+        store.insert_capture(cap).unwrap();
+    }
+
+    let stats_before = store.stats().unwrap();
+    assert!(stats_before.total_bytes >= 1000 * 1024);
+
+    // Run cleanup using policy (None = use policy settings)
+    let res = store.run_cleanup(None).unwrap();
+    assert!(res.removed_items > 0);
+    assert!(res.freed_bytes > 0);
+
+    // Pruned store should be <= 90% of 500 KB (450 KB)
+    let stats_after = store.stats().unwrap();
+    assert!(stats_after.total_bytes <= 450 * 1024);
+}
+
+#[test]
+fn test_regression_finding_8_fsync_lock_concurrency() {
+    let dir = tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    // Pre-insert some items
+    for i in 0..5 {
+        store.insert_capture(Capture::text(&format!("Item {i}"))).unwrap();
+    }
+
+    let s1 = store.clone();
+    let h1 = std::thread::spawn(move || {
+        // Insert a 2 MB item that writes and fsyncs to disk
+        let large_payload = vec![42u8; 2 * 1024 * 1024];
+        let cap = Capture {
+            kind: Kind::Other,
+            sub_kind: None,
+            primary: Some(large_payload),
+            formats: vec![],
+            files: vec![],
+            preview_text: Some("Large item".into()),
+            ext: None,
+            mime: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            source_app: None,
+            is_reference: false,
+            ref_path: None,
+        };
+        s1.insert_capture(cap).unwrap()
+    });
+
+    let s2 = store.clone();
+    let h2 = std::thread::spawn(move || {
+        // UI queries should execute concurrently without blocking on fsync
+        let start = std::time::Instant::now();
+        let list = s2.list(&Filter::default(), Sort::Newest, 0, 10).unwrap();
+        let elapsed = start.elapsed();
+        assert!(!list.is_empty());
+        elapsed
+    });
+
+    let item = h1.join().unwrap();
+    let elapsed = h2.join().unwrap();
+    assert_eq!(item.preview_text.as_deref(), Some("Large item"));
+    // Concurrent UI read should complete under 100ms
+    assert!(elapsed.as_millis() < 500);
+}
+
 

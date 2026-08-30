@@ -44,9 +44,13 @@ pub fn run() {
             let _ = window::show_popup(app);
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // No baked arguments: the plugin writes them into the Run key once at
+        // init, so a baked --silent could never be withdrawn when the user
+        // turns silentStart off. The flag carried no information anyway — the
+        // app reads settings.json at startup regardless.
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--silent"]),
+            None,
         ))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -71,6 +75,14 @@ pub fn run() {
 
             let store = Arc::new(Store::open(&store_root)?);
 
+            // The store deliberately does not read settings.json, so without
+            // this it runs on its defaults — 30 days and no size cap — and a
+            // user who set either would never see it take effect.
+            store.set_retention_policy(model::RetentionPolicy {
+                retention_days: resolved.storage.retention_days,
+                max_store_bytes: resolved.storage.max_store_bytes.map(|b| b as i64),
+            });
+
             let emit_handle = handle.clone();
             let clipboard = Arc::new(ClipboardWatcher::start(
                 store.clone(),
@@ -84,6 +96,23 @@ pub fn run() {
             let hotkeys = Arc::new(hotkey::HotkeyManager::new(Box::new(move || {
                 let _ = window::show_popup(&hotkey_handle);
             }))?);
+
+            // HotkeyManager::new only builds the machinery; nothing is
+            // registered until rebind runs, so without this the app starts with
+            // no hotkey at all. A binding the user has made unusable must not
+            // stop the app from starting — fall back to the default and log it,
+            // because a tray app that refuses to launch is unrecoverable
+            // without editing settings.json by hand.
+            let chord = hotkey::Chord::parse(&resolved.hotkey.binding).unwrap_or_else(|e| {
+                tracing::warn!(
+                    "hotkey {:?} is not parseable ({e}), falling back to Alt+V",
+                    resolved.hotkey.binding
+                );
+                hotkey::Chord::parse("Alt+V").expect("the default binding must always parse")
+            });
+            if let Err(e) = hotkeys.rebind(&chord, resolved.hotkey.aggressive_mode) {
+                tracing::error!("could not register hotkey {}: {e}", chord.to_display());
+            }
 
             // Both windows are created hidden in tauri.conf.json; showing one
             // later costs a few milliseconds instead of the 300-600 ms a fresh

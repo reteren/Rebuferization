@@ -454,10 +454,17 @@ pub fn rename_item(conn: &Connection, id: i64, title: &str) -> AppResult<()> {
     }
 }
 
-/// Deletes items and decrements derived blob refcounts.
-pub fn delete_items(conn: &Connection, root: &Path, ids: &[i64]) -> AppResult<()> {
+/// Deletes items and decrements derived blob refcounts inside a single transaction.
+pub fn delete_items(conn: &mut Connection, root: &Path, ids: &[i64]) -> AppResult<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let tx = conn.transaction()?;
+
+    let mut unlinks = Vec::new();
     for &id in ids {
-        let row: Option<(String, Option<String>, Option<String>, i64)> = conn
+        let row: Option<(String, Option<String>, Option<String>, i64)> = tx
             .query_row(
                 "SELECT hash, blob_path, thumb_path, is_reference FROM items WHERE id = ?1",
                 [id],
@@ -466,15 +473,48 @@ pub fn delete_items(conn: &Connection, root: &Path, ids: &[i64]) -> AppResult<()
             .optional()?;
 
         if let Some((hash, blob_path, thumb_path, is_ref)) = row {
-            conn.execute("DELETE FROM items WHERE id = ?1", [id])?;
+            tx.execute("DELETE FROM items WHERE id = ?1", [id])?;
             if is_ref == 0 {
-                delete_blob_if_unreferenced(
-                    conn,
-                    root,
-                    &hash,
-                    blob_path.as_deref(),
-                    thumb_path.as_deref(),
+                let count_items: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM items WHERE hash = ?1",
+                    [&hash],
+                    |r| r.get(0),
                 )?;
+                let count_formats: i64 = if let Some(ref rel) = blob_path {
+                    tx.query_row(
+                        "SELECT COUNT(*) FROM item_formats WHERE blob_path = ?1",
+                        [rel],
+                        |r| r.get(0),
+                    )?
+                } else {
+                    tx.query_row(
+                        "SELECT COUNT(*) FROM item_formats WHERE blob_path LIKE ?1",
+                        [format!("%{}", hash)],
+                        |r| r.get(0),
+                    )?
+                };
+
+                if count_items + count_formats == 0 {
+                    unlinks.push((blob_path, thumb_path));
+                }
+            }
+        }
+    }
+
+    tx.commit()?;
+
+    // Unlink the files after transaction commits with zero refcount
+    for (blob_path, thumb_path) in unlinks {
+        if let Some(rel) = blob_path {
+            let full_path = root.join("blobs").join(rel);
+            if full_path.exists() {
+                let _ = std::fs::remove_file(&full_path);
+            }
+        }
+        if let Some(rel) = thumb_path {
+            let full_path = root.join("blobs").join("thumbs").join(rel);
+            if full_path.exists() {
+                let _ = std::fs::remove_file(&full_path);
             }
         }
     }

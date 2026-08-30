@@ -18,9 +18,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use rusqlite::Connection;
 
+use tauri::AppHandle;
+
 use crate::capture::Capture;
 use crate::error::{AppError, AppResult};
-use crate::model::{CleanupResult, Facet, Filter, ItemDto, Kind, Sort, StorageStats, TabCounts};
+use crate::model::{
+    CleanupResult, Facet, Filter, ItemDto, Kind, RetentionPolicy, Sort, StorageStats, TabCounts,
+};
 use crate::store::blobs::{
     compute_files_hash, compute_hash, compute_text_hash, write_blob, write_thumbnail,
 };
@@ -40,9 +44,14 @@ struct ThumbnailTask {
     pub root: PathBuf,
 }
 
+/// LOCK ORDERING:
+/// Always acquire `root` (read lock) BEFORE acquiring `conn` (mutex lock).
+/// Never acquire `root` while holding `conn`.
 struct StoreInner {
     root: RwLock<PathBuf>,
     conn: Mutex<Connection>,
+    retention_policy: RwLock<RetentionPolicy>,
+    app_handle: Mutex<Option<AppHandle>>,
     thumb_tx: Sender<ThumbnailTask>,
     stop_janitor: AtomicBool,
 }
@@ -80,6 +89,8 @@ impl Store {
         let inner = Arc::new(StoreInner {
             root: RwLock::new(root.to_path_buf()),
             conn: Mutex::new(conn),
+            retention_policy: RwLock::new(RetentionPolicy::default()),
+            app_handle: Mutex::new(None),
             thumb_tx,
             stop_janitor: AtomicBool::new(false),
         });
@@ -108,7 +119,14 @@ impl Store {
                     }
                     if let Some(inner) = weak_inner.upgrade() {
                         let store = Store { inner };
-                        let _ = janitor::run_cleanup(&store, None, None);
+                        let policy = store.retention_policy();
+                        let app = store.inner.app_handle.lock().clone();
+                        let _ = janitor::run_cleanup_with_app(
+                            app.as_ref(),
+                            &store,
+                            Some(policy.retention_days),
+                            policy.max_store_bytes,
+                        );
                     } else {
                         return;
                     }
@@ -129,8 +147,23 @@ impl Store {
         self.inner.conn.lock()
     }
 
+    /// Updates the retention policy for automatic and manual cleanups.
+    pub fn set_retention_policy(&self, policy: RetentionPolicy) {
+        *self.inner.retention_policy.write() = policy;
+    }
+
+    /// Returns a copy of the current retention policy.
+    pub fn retention_policy(&self) -> RetentionPolicy {
+        *self.inner.retention_policy.read()
+    }
+
+    /// Attaches the Tauri AppHandle for event emission.
+    pub fn set_app_handle(&self, app: AppHandle) {
+        *self.inner.app_handle.lock() = Some(app);
+    }
+
     /// Updates the root directory and reopens the database connection (used during relocation).
-    pub(crate) fn switch_root(&self, new_root: &Path) -> AppResult<()> {
+    pub fn switch_root(&self, new_root: &Path) -> AppResult<()> {
         let mut root_guard = self.inner.root.write();
         let mut conn_guard = self.inner.conn.lock();
 
@@ -174,36 +207,15 @@ impl Store {
         };
 
         let root = self.root();
-        let conn = self.conn();
 
-        // 3. Duplicate check for non-references
-        if !cap.is_reference {
-            let existing: Option<i64> = conn
-                .query_row(
-                    "SELECT id FROM items WHERE hash = ?1 AND is_reference = 0",
-                    [&hash],
-                    |r| r.get(0),
-                )
-                .ok();
-
-            if let Some(id) = existing {
-                let now = current_time_ms();
-                conn.execute(
-                    "UPDATE items SET created_at = ?1, copy_count = copy_count + 1 WHERE id = ?2",
-                    rusqlite::params![now, id],
-                )?;
-                return queries::get_item(&conn, &root, id);
-            }
-        }
-
-        // 4. Write primary blob to disk if present
+        // 3. Write primary blob to disk OUTSIDE the SQLite lock
         let blob_path = if let Some(ref bytes) = cap.primary {
             Some(write_blob(&root, &hash, bytes)?)
         } else {
             None
         };
 
-        // 5. Handle thumbnails for images
+        // 4. Handle thumbnails for images OUTSIDE the SQLite lock
         let thumb_path = if cap.kind == Kind::Image {
             let thumb_filename = format!("{}.webp", hash);
             let thumb_target = root.join("blobs").join("thumbs").join(&thumb_filename);
@@ -223,6 +235,19 @@ impl Store {
             None
         };
 
+        // 5. Format blobs OUTSIDE the SQLite lock
+        let mut format_entries = Vec::new();
+        for fmt in cap.formats {
+            let (inline_data, fmt_blob_path) = if fmt.bytes.len() <= 65536 {
+                (Some(fmt.bytes.clone()), None)
+            } else {
+                let fmt_hash = compute_hash(&fmt.bytes);
+                let rel = write_blob(&root, &fmt_hash, &fmt.bytes)?;
+                (None, Some(rel))
+            };
+            format_entries.push((fmt.format, fmt_blob_path, inline_data, fmt.bytes.len() as i64));
+        }
+
         let byte_size = if let Some(ref bytes) = cap.primary {
             bytes.len() as i64
         } else {
@@ -232,7 +257,28 @@ impl Store {
         let now = current_time_ms();
         let is_ref_int = if cap.is_reference { 1 } else { 0 };
 
-        // 6. Insert row into items table
+        // 6. Acquire SQLite connection ONLY for database operations
+        let conn = self.conn();
+
+        if !cap.is_reference {
+            let existing: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM items WHERE hash = ?1 AND is_reference = 0",
+                    [&hash],
+                    |r| r.get(0),
+                )
+                .ok();
+
+            if let Some(id) = existing {
+                conn.execute(
+                    "UPDATE items SET created_at = ?1, copy_count = copy_count + 1 WHERE id = ?2",
+                    rusqlite::params![now, id],
+                )?;
+                return queries::get_item(&conn, &root, id);
+            }
+        }
+
+        // Insert row into items table
         conn.execute(
             "INSERT INTO items (
                 kind, sub_kind, hash, blob_path, thumb_path, is_reference, ref_path,
@@ -262,30 +308,20 @@ impl Store {
 
         let item_id = conn.last_insert_rowid();
 
-        // 7. Insert formats into item_formats
-        for fmt in cap.formats {
-            let (inline_data, fmt_blob_path) = if fmt.bytes.len() <= 65536 {
-                (Some(fmt.bytes.clone()), None)
-            } else {
-                let fmt_hash = compute_hash(&fmt.bytes);
-                let rel = write_blob(&root, &fmt_hash, &fmt.bytes)?;
-                (None, Some(rel))
-            };
-
+        for (format, fmt_blob_path, inline_data, fmt_byte_size) in format_entries {
             conn.execute(
                 "INSERT INTO item_formats (item_id, format, blob_path, inline_data, byte_size)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![
                     item_id,
-                    fmt.format,
+                    format,
                     fmt_blob_path,
                     inline_data,
-                    fmt.bytes.len() as i64,
+                    fmt_byte_size,
                 ],
             )?;
         }
 
-        // 8. Insert files into item_files
         for (pos, file) in cap.files.into_iter().enumerate() {
             conn.execute(
                 "INSERT INTO item_files (item_id, path, file_name, byte_size, position)
@@ -304,34 +340,34 @@ impl Store {
         offset: u32,
         limit: u32,
     ) -> AppResult<Vec<ItemDto>> {
-        let conn = self.conn();
         let root = self.root();
+        let conn = self.conn();
         queries::list_items(&conn, &root, filter, sort, offset, limit)
     }
 
     pub fn search(&self, query: &str, filter: &Filter, limit: u32) -> AppResult<Vec<ItemDto>> {
-        let conn = self.conn();
         let root = self.root();
+        let conn = self.conn();
         queries::search_items(&conn, &root, query, filter, limit)
     }
 
     pub fn get(&self, id: i64) -> AppResult<ItemDto> {
-        let conn = self.conn();
         let root = self.root();
+        let conn = self.conn();
         queries::get_item(&conn, &root, id)
     }
 
     /// Absolute path of an item's blob, or of the referenced file.
     pub fn blob_path(&self, id: i64) -> AppResult<PathBuf> {
-        let conn = self.conn();
         let root = self.root();
+        let conn = self.conn();
         queries::get_blob_path(&conn, &root, id)
     }
 
     /// Every stored format for an item, in paste-restore order.
     pub fn formats(&self, id: i64) -> AppResult<Vec<(String, Vec<u8>)>> {
-        let conn = self.conn();
         let root = self.root();
+        let conn = self.conn();
         queries::get_formats(&conn, &root, id)
     }
 
@@ -346,14 +382,14 @@ impl Store {
     }
 
     pub fn delete(&self, ids: &[i64]) -> AppResult<()> {
-        let conn = self.conn();
         let root = self.root();
-        queries::delete_items(&conn, &root, ids)
+        let mut conn = self.conn();
+        queries::delete_items(&mut conn, &root, ids)
     }
 
     pub fn add_references(&self, paths: &[String]) -> AppResult<Vec<ItemDto>> {
-        let conn = self.conn();
         let root = self.root();
+        let conn = self.conn();
         queries::add_references(&conn, &root, paths)
     }
 
@@ -368,8 +404,8 @@ impl Store {
     }
 
     pub fn stats(&self) -> AppResult<StorageStats> {
-        let conn = self.conn();
         let root = self.root();
+        let conn = self.conn();
         queries::get_storage_stats(&conn, &root)
     }
 
@@ -383,14 +419,17 @@ impl Store {
     /// manual shelf references, which the janitor never touches — that is the
     /// difference between Clean now and Reset.
     pub fn clear_history(&self, include_pinned: bool) -> AppResult<CleanupResult> {
-        let conn = self.conn();
         let root = self.root();
+        let conn = self.conn();
         queries::clear_history(&conn, &root, include_pinned)
     }
 
     /// Age sweep plus, if configured, the size cap. Safe to call repeatedly.
     pub fn run_cleanup(&self, older_than_days: Option<u32>) -> AppResult<CleanupResult> {
-        janitor::run_cleanup(self, older_than_days, None)
+        let policy = self.retention_policy();
+        let days = older_than_days.unwrap_or(policy.retention_days);
+        let app = self.inner.app_handle.lock().clone();
+        janitor::run_cleanup_with_app(app.as_ref(), self, Some(days), policy.max_store_bytes)
     }
 }
 

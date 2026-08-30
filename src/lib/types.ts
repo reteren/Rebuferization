@@ -92,6 +92,13 @@ export interface CleanupResult {
 
 export type ImportMode = 'merge' | 'replace'
 
+/// What the janitor is allowed to delete. Pushed into the store from settings;
+/// the store does not read settings.json itself.
+export interface RetentionPolicy {
+  retentionDays: number
+  maxStoreBytes: number | null
+}
+
 /// Payload of the `storage-warning` event. `removedItems` is 0 for the 90%
 /// warning fired before anything is deleted.
 export interface StorageWarning {

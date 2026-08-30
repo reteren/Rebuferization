@@ -13,8 +13,8 @@ use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
 use crate::error::{AppError, AppResult};
-use crate::model::{events, CleanupResult, ImportMode, StoreProgress};
-use crate::store::blobs::delete_blob_if_unreferenced;
+use crate::model::{events, CleanupResult, ImportMode, StorageWarning, StoreProgress};
+use crate::store::queries;
 use crate::store::Store;
 
 fn current_time_ms() -> i64 {
@@ -130,16 +130,21 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
             } else {
                 let hash = entry.file_name().to_string_lossy().to_string();
                 if !hash.contains(".tmp") && hash.len() == 64 {
-                    let count: i64 = conn_guard
+                    let count_items: i64 = conn_guard
                         .query_row(
-                            "SELECT COUNT(*) FROM items WHERE hash = ?1
-                             UNION ALL
-                             SELECT COUNT(*) FROM item_formats WHERE blob_path LIKE ?2",
-                            rusqlite::params![hash, format!("%{}", hash)],
+                            "SELECT COUNT(*) FROM items WHERE hash = ?1",
+                            [&hash],
                             |r| r.get(0),
                         )
                         .unwrap_or(0);
-                    if count == 0 {
+                    let count_formats: i64 = conn_guard
+                        .query_row(
+                            "SELECT COUNT(*) FROM item_formats WHERE blob_path LIKE ?1",
+                            [format!("%{}", hash)],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(0);
+                    if count_items + count_formats == 0 {
                         let _ = std::fs::remove_file(path);
                     }
                 }
@@ -150,13 +155,14 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
     Ok(())
 }
 
-/// Runs the age sweep and size cap pruning.
-pub fn run_cleanup(
+/// Runs the age sweep and size cap pruning with optional AppHandle for events.
+pub fn run_cleanup_with_app(
+    app: Option<&AppHandle>,
     store: &Store,
     older_than_days: Option<u32>,
     max_store_bytes: Option<i64>,
 ) -> AppResult<CleanupResult> {
-    let conn = store.conn();
+    let mut conn = store.conn();
     let root = store.root().to_path_buf();
     let mut removed_items = 0i64;
     let mut freed_bytes = 0i64;
@@ -166,29 +172,24 @@ pub fn run_cleanup(
     let cutoff_ms = current_time_ms() - (retention_days as i64 * 24 * 60 * 60 * 1000);
 
     {
-        let mut stmt = conn.prepare(
-            "SELECT id, hash, blob_path, thumb_path, byte_size
-             FROM items
-             WHERE pinned = 0 AND is_reference = 0 AND created_at < ?1",
-        )?;
-        let expired: Vec<(i64, String, Option<String>, Option<String>, i64)> = stmt
-            .query_map([cutoff_ms], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        for (id, hash, blob_path, thumb_path, byte_size) in expired {
-            conn.execute("DELETE FROM items WHERE id = ?1", [id])?;
-            delete_blob_if_unreferenced(
-                &conn,
-                &root,
-                &hash,
-                blob_path.as_deref(),
-                thumb_path.as_deref(),
+        let expired: Vec<(i64, i64)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, byte_size
+                 FROM items
+                 WHERE pinned = 0 AND is_reference = 0 AND created_at < ?1",
             )?;
-            removed_items += 1;
-            freed_bytes += byte_size;
+            let res: Vec<(i64, i64)> = stmt.query_map([cutoff_ms], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            res
+        };
+
+        if !expired.is_empty() {
+            let expired_ids: Vec<i64> = expired.iter().map(|(id, _)| *id).collect();
+            let expired_bytes: i64 = expired.iter().map(|(_, bytes)| *bytes).sum();
+            queries::delete_items(&mut conn, &root, &expired_ids)?;
+            removed_items += expired_ids.len() as i64;
+            freed_bytes += expired_bytes;
         }
     }
 
@@ -202,38 +203,67 @@ pub fn run_cleanup(
             )
             .unwrap_or(0);
 
+        let warn_threshold = (cap * 9) / 10;
+
+        // Emit 90% warning if used_bytes >= 90% of cap
+        if total_bytes >= warn_threshold {
+            if let Some(a) = app {
+                let _ = a.emit(
+                    events::STORAGE_WARNING,
+                    StorageWarning {
+                        used_bytes: total_bytes,
+                        cap_bytes: cap,
+                        removed_items: 0,
+                        freed_bytes: 0,
+                    },
+                );
+            }
+        }
+
         if total_bytes > cap {
-            let target_bytes = (cap * 9) / 10;
+            let target_bytes = warn_threshold;
             let mut current_bytes = total_bytes;
 
-            let mut stmt = conn.prepare(
-                "SELECT id, hash, blob_path, thumb_path, byte_size
-                 FROM items
-                 WHERE pinned = 0 AND is_reference = 0
-                 ORDER BY created_at ASC",
-            )?;
-            let rows: Vec<(i64, String, Option<String>, Option<String>, i64)> = stmt
-                .query_map([], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
+            let rows: Vec<(i64, i64)> = {
+                let mut stmt = conn.prepare(
+                    "SELECT id, byte_size
+                     FROM items
+                     WHERE pinned = 0 AND is_reference = 0
+                     ORDER BY created_at ASC",
+                )?;
+                let res: Vec<(i64, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                res
+            };
 
-            for (id, hash, blob_path, thumb_path, byte_size) in rows {
+            let mut prune_ids = Vec::new();
+            let mut prune_bytes = 0i64;
+            for (id, byte_size) in rows {
                 if current_bytes <= target_bytes {
                     break;
                 }
-                conn.execute("DELETE FROM items WHERE id = ?1", [id])?;
-                delete_blob_if_unreferenced(
-                    &conn,
-                    &root,
-                    &hash,
-                    blob_path.as_deref(),
-                    thumb_path.as_deref(),
-                )?;
+                prune_ids.push(id);
                 current_bytes -= byte_size;
-                removed_items += 1;
-                freed_bytes += byte_size;
+                prune_bytes += byte_size;
+            }
+
+            if !prune_ids.is_empty() {
+                queries::delete_items(&mut conn, &root, &prune_ids)?;
+                removed_items += prune_ids.len() as i64;
+                freed_bytes += prune_bytes;
+
+                if let Some(a) = app {
+                    let _ = a.emit(
+                        events::STORAGE_WARNING,
+                        StorageWarning {
+                            used_bytes: current_bytes,
+                            cap_bytes: cap,
+                            removed_items: prune_ids.len() as i64,
+                            freed_bytes: prune_bytes,
+                        },
+                    );
+                }
             }
         }
     }
@@ -242,6 +272,15 @@ pub fn run_cleanup(
         removed_items,
         freed_bytes,
     })
+}
+
+/// Runs the age sweep and size cap pruning without AppHandle.
+pub fn run_cleanup(
+    store: &Store,
+    older_than_days: Option<u32>,
+    max_store_bytes: Option<i64>,
+) -> AppResult<CleanupResult> {
+    run_cleanup_with_app(None, store, older_than_days, max_store_bytes)
 }
 
 /// Copies db + blobs to `target`, verifies row count and total bytes, then

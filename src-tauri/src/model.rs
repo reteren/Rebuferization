@@ -197,6 +197,25 @@ pub enum ImportMode {
     Replace,
 }
 
+/// What the janitor is allowed to delete. The store is deliberately ignorant of
+/// `Settings` — depending on it would make the settings module and the store
+/// mutually dependent — so the app pushes this snapshot in at startup and again
+/// whenever the user changes it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionPolicy {
+    /// 1..=30.
+    pub retention_days: u32,
+    /// `None` = unlimited.
+    pub max_store_bytes: Option<i64>,
+}
+
+impl Default for RetentionPolicy {
+    fn default() -> Self {
+        RetentionPolicy { retention_days: 30, max_store_bytes: None }
+    }
+}
+
 /// Payload of the `storage-warning` event. Typed, because the frontend shows
 /// real numbers in the toast rather than a prebaked sentence.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

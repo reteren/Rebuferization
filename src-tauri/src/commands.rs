@@ -165,7 +165,29 @@ pub fn update_settings(
     state: State<'_, AppState>,
     patch: serde_json::Value,
 ) -> AppResult<Settings> {
+    let before = state.settings.get();
     let next = state.settings.patch(patch)?;
+
+    // Settings that own live OS state have to be pushed at whatever holds it;
+    // saving the file changes nothing on its own.
+    if next.hotkey.binding != before.hotkey.binding
+        || next.hotkey.aggressive_mode != before.hotkey.aggressive_mode
+    {
+        // A rejected chord must not lose the rest of the patch, which is
+        // already saved — report it and leave the previous binding registered.
+        let chord = crate::hotkey::Chord::parse(&next.hotkey.binding)?;
+        state.hotkeys.rebind(&chord, next.hotkey.aggressive_mode)?;
+    }
+
+    if next.storage.retention_days != before.storage.retention_days
+        || next.storage.max_store_bytes != before.storage.max_store_bytes
+    {
+        state.store.set_retention_policy(crate::model::RetentionPolicy {
+            retention_days: next.storage.retention_days,
+            max_store_bytes: next.storage.max_store_bytes.map(|b| b as i64),
+        });
+    }
+
     let _ = app.emit(events::SETTINGS_CHANGED, &next);
     Ok(next)
 }
