@@ -8,26 +8,44 @@
     zoom: number
     showAge: boolean
     formatLabelSize: 'off' | 'small' | 'medium' | 'large'
+    animateGifs: boolean
     style?: string
     onactivate?: (item: ItemDto) => void
     oncontextmenu?: (item: ItemDto, x: number, y: number) => void
     ontoggle?: (item: ItemDto, mode: 'single' | 'ctrl' | 'shift') => void
   }
 
-  let { item, selected, focused, zoom, showAge, formatLabelSize, style, onactivate, oncontextmenu, ontoggle }: Props =
+  let { item, selected, focused, zoom, showAge, formatLabelSize, animateGifs, style, onactivate, oncontextmenu, ontoggle }: Props =
     $props()
 
-  // A thumbnail that fails to load (asset protocol 404 after a janitor prune,
-  // a thumb never generated) degrades to the same placeholder a thumbnail-less
-  // card uses instead of a broken-image glyph. Once the <img> errors it is
-  // removed, so the card stops re-requesting the missing file.
+  // Two-level fallback, so a broken source never shows a broken-image glyph:
+  //   1. animateGifs on + item.animatedUrl (the original blob) -> animate it.
+  //      If that URL fails, drop to the static thumbUrl (a decoded frame).
+  //   2. thumbUrl -> static first frame. If it fails or is absent, the
+  //      thumbnail-less placeholder glyph. A failed <img> is removed from the
+  //      DOM, so the card stops re-requesting the missing file.
+  let animatedFailed = $state(false)
   let thumbFailed = $state(false)
+  $effect(() => {
+    void item.animatedUrl
+    animatedFailed = false
+  })
   $effect(() => {
     void item.thumbUrl
     thumbFailed = false
   })
 
-  const showThumb = $derived(Boolean(item.thumbUrl) && !item.missing && !thumbFailed)
+  const imgSrc = $derived(
+    animateGifs && item.animatedUrl && !animatedFailed ? item.animatedUrl : item.thumbUrl,
+  )
+  const showThumb = $derived(Boolean(imgSrc) && !item.missing && !thumbFailed)
+
+  function onImgError(): void {
+    // The animated original failed: degrade to the static first frame. The
+    // static thumb failing then falls through to the glyph placeholder.
+    if (animateGifs && item.animatedUrl && !animatedFailed) animatedFailed = true
+    else thumbFailed = true
+  }
 
   const KIND_FALLBACK: Record<Kind, string> = {
     text: 'TXT',
@@ -130,13 +148,13 @@
   <div class="preview">
     {#if item.kind === 'image'}
       {#if showThumb}
-        <img class="thumb" src={item.thumbUrl!} alt="" draggable="false" decoding="async" onerror={() => { thumbFailed = true }} />
+        <img class="thumb" src={imgSrc!} alt="" draggable="false" decoding="async" onerror={onImgError} />
       {:else}
         <div class="glyph-fallback"></div>
       {/if}
     {:else if item.kind === 'video'}
       {#if showThumb}
-        <img class="thumb" src={item.thumbUrl!} alt="" draggable="false" decoding="async" onerror={() => { thumbFailed = true }} />
+        <img class="thumb" src={imgSrc!} alt="" draggable="false" decoding="async" onerror={onImgError} />
       {/if}
       <span class="play" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="13" height="13"><path d="M8.2 5.6v12.8L19 12z" fill="currentColor" /></svg>

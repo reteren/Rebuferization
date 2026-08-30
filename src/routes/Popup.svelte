@@ -551,6 +551,7 @@
         focusedId={selection.focusedId}
         showAge={settings.current.appearance.showAge}
         formatLabelSize={settings.current.appearance.formatLabelSize}
+        animateGifs={settings.current.appearance.animateGifs}
         onactivate={onGridActivate}
         oncontextmenu={onCardContextMenu}
         ontoggle={onGridToggle}

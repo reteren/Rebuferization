@@ -57,7 +57,10 @@ renders. `src/routes/Popup.svelte` (W6) is where the two meet.
 // Grid.svelte — virtualized; renders group headers itself when `grouped`
 { items: ItemDto[], zoom: number, grouped: boolean,
   selectedIds: Set<number>, focusedId: number | null,
-  showAge: boolean, formatLabelSize: string }
+  showAge: boolean, formatLabelSize: string, animateGifs: boolean }
+// Grid forwards showAge, formatLabelSize and animateGifs straight to Card. It
+// does not interpret them — a display flag that stopped at the Grid could never
+// reach the thing it describes, which is how animateGifs stayed dead.
 // events: same three, forwarded from Card
 
 // Tabs.svelte      { active: TabId, counts: Record<TabId, number> } -> onselect(tab)

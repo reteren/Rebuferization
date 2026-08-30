@@ -410,6 +410,10 @@ function imageItem(rnd: () => number, id: number, createdAt: number, opts: { pin
     ext,
     title: `Screenshot ${date} at 0${id % 9}.${ext.toLowerCase()}`,
     thumbUrl: animated ? GIF_URI : art.url,
+    // The original blob: the only source that actually animates. The static
+    // webp thumbnail (GIF_URI here stands in for the decoded first frame) is
+    // what renderers fall back to when the flag is off.
+    animatedUrl: animated ? GIF_URI : null,
     width: art.w,
     height: art.h,
     byteSize: Math.round((200_000 + rnd() * 4_800_000) / 1024) * 1024,
@@ -566,6 +570,7 @@ function requiredItems(now: number): ItemDto[] {
       ext: 'GIF',
       title: 'screen_capture_looping.gif',
       thumbUrl: GIF_URI,
+      animatedUrl: GIF_URI,
       width: 48,
       height: 48,
       byteSize: 18_204,

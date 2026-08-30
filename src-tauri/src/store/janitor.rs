@@ -3,7 +3,7 @@
 //!
 //! OWNER: worker W1. All three long operations emit `store-progress`.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -128,68 +128,89 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
     };
 
     // One walk over the whole `blobs/` tree. Each file is stat'd exactly once
-    // and never costs a query. WalkDir was measurably slower here (per-entry
-    // metadata round-trips in debug builds); a manual `read_dir` recursion
-    // reuses the attributes the directory listing already carries.
-    let mut existing_blobs: HashSet<String> = HashSet::new();
+    // and never costs a query. The walk is parallelized with a work-stealing
+    // queue: iterating ~25,000 entries on one thread is hundreds of
+    // milliseconds even in release, and the `thumbs/` directory alone would
+    // otherwise serialize a third of the work. Entries are classified as
+    // dir/file from the directory listing's own attributes (no extra syscall).
+let mut existing_blobs: HashSet<String> = HashSet::new();
     let t_loop = std::time::Instant::now();
-    let mut n_files = 0usize;
     {
         let thumbs_dir = blobs_dir.join("thumbs");
-        let mut stack: Vec<std::path::PathBuf> = vec![blobs_dir.clone()];
-        while let Some(dir) = stack.pop() {
-            let in_thumbs = dir == thumbs_dir;
-            let read = match std::fs::read_dir(&dir) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            for entry in read {
-                let Ok(entry) = entry else { continue };
-                let Ok(ft) = entry.file_type() else { continue };
-                if ft.is_dir() {
-                    stack.push(entry.path());
-                    continue;
-                }
-                if !ft.is_file() {
-                    continue;
-                }
-                n_files += 1;
-                let path = entry.path();
-                let name = entry.file_name();
-                let name_s = name.to_string_lossy();
-
-                // Part 1: leftover temp files (atomic-write leftovers from a crash).
-                if name_s.contains(".tmp.") || name_s.ends_with(".tmp") {
-                    let _ = std::fs::remove_file(&path);
-                    continue;
-                }
-
-                if in_thumbs {
-                    // Part 3, thumbnails: a thumb is keyed by the item hash.
-                    if let Some(hash) = name_s.strip_suffix(".webp") {
-                        if !item_hashes.contains(hash) {
-                            let _ = std::fs::remove_file(&path);
-                        }
-                    }
-                } else {
-                    // Part 3, primary blobs: record the rel path (feeds part
-                    // 2), then delete the file if neither reference set knows
-                    // its hash.
-                    if let Ok(rel) = path.strip_prefix(&blobs_dir) {
-                        existing_blobs.insert(normalize_rel(rel));
-                    }
-                    if name_s.len() == 64 {
-                        let hash = name_s.as_ref();
-                        if !item_hashes.contains(hash) && !format_hashes.contains(hash) {
-                            let _ = std::fs::remove_file(&path);
-                        }
-                    }
-                }
+        let mut seed: VecDeque<(std::path::PathBuf, bool)> = VecDeque::new();
+        if let Ok(rd) = std::fs::read_dir(&blobs_dir) {
+            for e in rd.flatten() {
+                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                seed.push_back((e.path(), is_dir));
             }
         }
+        let queue = parking_lot::Mutex::new(seed);
+        let n_threads = std::thread::available_parallelism()
+            .map(|n| n.get().max(1))
+            .unwrap_or(4)
+            .min(8);
+
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(n_threads);
+            for _ in 0..n_threads {
+                handles.push(scope.spawn(|| {
+                    let mut local_existing: HashSet<String> = HashSet::new();
+                    loop {
+                        let (path, is_dir) = match queue.lock().pop_front() {
+                            Some(item) => item,
+                            None => break,
+                        };
+                        if is_dir {
+                            if let Ok(rd) = std::fs::read_dir(&path) {
+                                let mut q = queue.lock();
+                                for e in rd.flatten() {
+                                    let d = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                                    q.push_back((e.path(), d));
+                                }
+                            }
+                            continue;
+                        }
+                        let name = path.file_name().unwrap_or_default();
+                        let name_s = name.to_string_lossy();
+
+                        // Part 1: leftover temp files (atomic-write leftovers).
+                        if name_s.contains(".tmp.") || name_s.ends_with(".tmp") {
+                            let _ = std::fs::remove_file(&path);
+                            continue;
+                        }
+
+                        if path.starts_with(&thumbs_dir) {
+                            // Part 3, thumbnails: a thumb is keyed by the item hash.
+                            if let Some(hash) = name_s.strip_suffix(".webp") {
+                                if !item_hashes.contains(hash) {
+                                    let _ = std::fs::remove_file(&path);
+                                }
+                            }
+                        } else {
+                            // Part 3, primary blobs: record the rel path (feeds
+                            // part 2), then delete the file if neither
+                            // reference set knows its hash.
+                            if let Ok(rel) = path.strip_prefix(&blobs_dir) {
+                                local_existing.insert(normalize_rel(rel));
+                            }
+                            if name_s.len() == 64 {
+                                let hash = name_s.as_ref();
+                                if !item_hashes.contains(hash) && !format_hashes.contains(hash) {
+                                    let _ = std::fs::remove_file(&path);
+                                }
+                            }
+                        }
+                    }
+                    local_existing
+                }));
+            }
+            for h in handles {
+                existing_blobs.extend(h.join().unwrap());
+            }
+        });
     }
 
-    eprintln!("[W29] walk loop: {:.1} ms for {} files", t_loop.elapsed().as_secs_f64() * 1000.0, n_files);
+    eprintln!("[W29] walk loop: {:.1} ms", t_loop.elapsed().as_secs_f64() * 1000.0);
     // Part 2: rows whose primary blob is missing on disk. The walk above has
     // already stat'd the tree; this is a set lookup per row, and the DELETE
     // only ever runs for rows that are genuinely broken.

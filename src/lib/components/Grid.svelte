@@ -11,6 +11,7 @@
     focusedId: number | null
     showAge: boolean
     formatLabelSize: string
+    animateGifs: boolean
     onactivate?: (item: ItemDto) => void
     oncontextmenu?: (item: ItemDto, x: number, y: number) => void
     ontoggle?: (item: ItemDto, mode: 'single' | 'ctrl' | 'shift') => void
@@ -24,6 +25,7 @@
     focusedId,
     showAge,
     formatLabelSize,
+    animateGifs,
     onactivate,
     oncontextmenu,
     ontoggle,
@@ -275,6 +277,7 @@
           zoom={z}
           showAge={showAge}
           formatLabelSize={labelSize}
+          animateGifs={animateGifs}
           style="position:absolute; left:{c.x}px; top:{c.y}px; width:{tileW}px; height:{tileH}px"
           onactivate={onactivate}
           oncontextmenu={oncontextmenu}
