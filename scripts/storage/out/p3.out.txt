@@ -1,0 +1,15 @@
+CALL disconnect(W:\store, marker=C:\Rebuferization\scripts\storage\phase3.marker.txt)
+RESULT pre_dismount_insert=ok id=26
+READY_BEFORE_DISMOUNT
+MARKER=dismounted seen
+RESULT post_dismount_insert_ERR=io: Системе не удается найти указанный путь. (os error 3)
+RESULT post_dismount_list=ok rows=0
+RESULT post_dismount_cleanup=ok removed=0
+RESULT post_dismount_reopen_ERR=io: Системе не удается найти указанный путь. (os error 3)
+MARKER=remounted seen
+RESULT post_remount_insert_ERR=database: disk I/O error
+RESULT post_remount_list=ok rows=0
+RESULT post_remount_reopen_after_drop=ok
+RESULT post_remount_cleanup=ok removed=0
+RESULT post_remount_insert_fresh=ok id=27
+DONE

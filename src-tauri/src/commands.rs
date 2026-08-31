@@ -162,6 +162,20 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
     state.settings.get()
 }
 
+/// Reads the live state of Windows clipboard history (Win+V) for this user.
+/// OS state, not a stored preference — see `settings::clipboard_history_enabled`.
+#[tauri::command]
+pub fn get_clipboard_history_enabled() -> AppResult<bool> {
+    crate::settings::clipboard_history_enabled()
+}
+
+/// Enables or disables Windows clipboard history (Win+V) for this user by
+/// writing an explicit DWORD, never by deleting the value.
+#[tauri::command]
+pub fn set_clipboard_history_enabled(enabled: bool) -> AppResult<()> {
+    crate::settings::set_clipboard_history_enabled(enabled)
+}
+
 #[tauri::command]
 pub fn update_settings(
     app: AppHandle,

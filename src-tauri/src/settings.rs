@@ -645,6 +645,144 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+// ---------------------------------------------------------------------------
+// Windows clipboard history (Win+V)
+// ---------------------------------------------------------------------------
+//
+// This is OS state, deliberately NOT in settings.json: it lives in HKCU and the
+// Settings UI reflects the live system value rather than a stored preference,
+// so settings.json never shadows a change the user made in Windows Settings.
+// Mirror of the installer's `clipboard-history.nsh`, but without its foot-gun:
+// the installer compares the read value numerically, so an ABSENT value is
+// coerced to 0 and treated as "was enabled"; here absence is detected with the
+// registry API's own not-found error.
+
+/// Maps a raw `EnableClipboardHistory` DWORD to "enabled". ABSENT means enabled
+/// (the Windows default), 0 means disabled, and any other value means enabled.
+fn clipboard_history_enabled_from_dword(value: Option<u32>) -> bool {
+    match value {
+        Some(0) => false,
+        _ => true,
+    }
+}
+
+/// Reads the current state of Windows clipboard history for this user:
+/// `HKCU\Software\Microsoft\Clipboard\EnableClipboardHistory` is a REG_DWORD
+/// where 1 or ABSENT both mean enabled and 0 means disabled.
+pub fn clipboard_history_enabled() -> AppResult<bool> {
+    use windows::core::w;
+    use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
+        REG_VALUE_TYPE,
+    };
+
+    let mut hkey = HKEY::default();
+    // SAFETY: hkey is a stack buffer the API fills; all parameters are plain values.
+    let err = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Clipboard"),
+            None,
+            KEY_READ,
+            &mut hkey,
+        )
+    };
+    if err != ERROR_SUCCESS {
+        return Err(AppError::Win(format!(
+            "RegOpenKeyExW(Software\\Microsoft\\Clipboard) failed: {}",
+            err.0
+        )));
+    }
+
+    let mut value: u32 = 0;
+    let mut size: u32 = std::mem::size_of::<u32>() as u32;
+    let mut kind: REG_VALUE_TYPE = REG_DWORD;
+    // SAFETY: value/size/kind are stack buffers of the right width for a DWORD
+    // query; the key handle is live and open for KEY_READ.
+    let err = unsafe {
+        RegQueryValueExW(
+            hkey,
+            w!("EnableClipboardHistory"),
+            None,
+            Some(&mut kind),
+            Some(&mut value as *mut u32 as *mut u8),
+            Some(&mut size),
+        )
+    };
+    // The handle must close on every path.
+    // SAFETY: the key handle is still valid.
+    unsafe {
+        let _ = RegCloseKey(hkey);
+    }
+
+    if err == ERROR_FILE_NOT_FOUND {
+        // ABSENT = enabled, per the Windows default.
+        return Ok(true);
+    }
+    if err != ERROR_SUCCESS {
+        return Err(AppError::Win(format!(
+            "RegQueryValueExW(EnableClipboardHistory) failed: {}",
+            err.0
+        )));
+    }
+    // A non-DWORD value (or a truncated read) is treated as enabled rather than
+    // guessing at a disabled state from garbage bytes — the mapping rule is
+    // "only an explicit 0 disables".
+    if kind != REG_DWORD || size != std::mem::size_of::<u32>() as u32 {
+        return Ok(true);
+    }
+    Ok(clipboard_history_enabled_from_dword(Some(value)))
+}
+
+/// Sets Windows clipboard history for this user. Always writes an explicit
+/// DWORD (1 = enabled, 0 = disabled) rather than deleting the value, so the
+/// state stays explicit and matches what the Windows Settings UI writes.
+pub fn set_clipboard_history_enabled(enabled: bool) -> AppResult<()> {
+    use windows::core::w;
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_DWORD,
+    };
+
+    let mut hkey = HKEY::default();
+    // SAFETY: hkey is a stack buffer the API fills; all parameters are plain values.
+    let err = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Clipboard"),
+            None,
+            KEY_SET_VALUE,
+            &mut hkey,
+        )
+    };
+    if err != ERROR_SUCCESS {
+        return Err(AppError::Win(format!(
+            "RegOpenKeyExW(Software\\Microsoft\\Clipboard) failed: {}",
+            err.0
+        )));
+    }
+
+    let value: u32 = if enabled { 1 } else { 0 };
+    let bytes = value.to_le_bytes();
+    // SAFETY: the key handle is live and open for KEY_SET_VALUE; the slice is a
+    // 4-byte DWORD little-endian, which is what REG_DWORD stores.
+    let err = unsafe {
+        RegSetValueExW(hkey, w!("EnableClipboardHistory"), None, REG_DWORD, Some(&bytes))
+    };
+    // SAFETY: the key handle is still valid.
+    unsafe {
+        let _ = RegCloseKey(hkey);
+    }
+    if err != ERROR_SUCCESS {
+        return Err(AppError::Win(format!(
+            "RegSetValueExW(EnableClipboardHistory) failed: {}",
+            err.0
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,5 +984,34 @@ mod tests {
         assert_eq!(s.window.zoom_step, 5);
         assert_eq!(s.window.percent_of_monitor, 10);
         assert_eq!(s.appearance.accent, "#7aa2ff");
+    }
+
+    // -----------------------------------------------------------------------
+    // Windows clipboard history state mapping. This is where the installer
+    // went wrong (numeric comparison coerced ABSENT to 0), so the mapping is
+    // pinned by tests: only an explicit 0 disables; ABSENT and anything else
+    // mean enabled.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn clipboard_history_absent_means_enabled() {
+        assert!(clipboard_history_enabled_from_dword(None));
+    }
+
+    #[test]
+    fn clipboard_history_one_means_enabled() {
+        assert!(clipboard_history_enabled_from_dword(Some(1)));
+    }
+
+    #[test]
+    fn clipboard_history_zero_means_disabled() {
+        assert!(!clipboard_history_enabled_from_dword(Some(0)));
+    }
+
+    #[test]
+    fn clipboard_history_any_other_value_means_enabled() {
+        for v in [2u32, 3, 42, 4_000_000_000, u32::MAX] {
+            assert!(clipboard_history_enabled_from_dword(Some(v)), "value {v} must map to enabled");
+        }
     }
 }

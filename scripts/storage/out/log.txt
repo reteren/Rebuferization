@@ -1,0 +1,224 @@
+### cleanup-before
+=== PHASE 1: full volume on capture ===
+### P1-seed-small
+CALL seed(W:\store, 5)
+RESULT seed=5/5
+STATE[after_seed] count=5
+STATE[after_seed] used_bytes=1065
+STATE[after_seed] integrity=ok
+STATE[after_seed] blob_files=5 thumb_files=0 temp_files=0
+STATE[after_seed] rows_with_blob_path=5
+P1 free bytes after fill: 139264
+### P1-insert-1MB
+CALL insert(W:\store, 1048576 bytes)
+RESULT insert_before_count=5
+RESULT insert_ERR=io: ╨Э╨╡╨┤╨╛╤Б╤В╨░╤В╨╛╤З╨╜╨╛ ╨╝╨╡╤Б╤В╨░ ╨╜╨░ ╨┤╨╕╤Б╨║╨╡. (os error 112)
+RESULT insert_after_count=5 (delta 0)
+STATE[post_insert] count=5
+STATE[post_insert] used_bytes=1065
+STATE[post_insert] integrity=ok
+STATE[post_insert] blob_files=6 thumb_files=0 temp_files=1
+STATE[post_insert] rows_with_blob_path=5
+### P1-insert-4KB
+CALL insert(W:\store, 4096 bytes)
+RESULT insert_before_count=5
+RESULT insert=ok id=6
+RESULT insert_after_count=6 (delta 1)
+STATE[post_insert] count=6
+STATE[post_insert] used_bytes=5161
+STATE[post_insert] integrity=ok
+STATE[post_insert] blob_files=6 thumb_files=0 temp_files=0
+STATE[post_insert] rows_with_blob_path=6
+### P1-insert-256B
+CALL insert(W:\store, 256 bytes)
+RESULT insert_before_count=6
+RESULT insert=ok id=7
+RESULT insert_after_count=7 (delta 1)
+STATE[post_insert] count=7
+STATE[post_insert] used_bytes=5417
+STATE[post_insert] integrity=ok
+STATE[post_insert] blob_files=7 thumb_files=0 temp_files=0
+STATE[post_insert] rows_with_blob_path=7
+=== PHASE 2: janitor on a full volume ===
+### P2a-seed-15
+CALL seed(W:\store, 15)
+RESULT seed=15/15
+STATE[after_seed] count=17
+STATE[after_seed] used_bytes=7552
+STATE[after_seed] integrity=ok
+STATE[after_seed] blob_files=17 thumb_files=0 temp_files=0
+STATE[after_seed] rows_with_blob_path=17
+### P2a-backdate-all-31d
+RESULT backdate_rows=17
+P2a free bytes after fill: 131072
+### P2a-cleanup-age-full
+CALL cleanup(W:\store, retention=30, cap=None)
+RESULT cleanup=ok removed=17 freed=7552 (count before=17)
+STATE[post_cleanup] count=0
+STATE[post_cleanup] used_bytes=0
+STATE[post_cleanup] integrity=ok
+STATE[post_cleanup] blob_files=0 thumb_files=0 temp_files=0
+STATE[post_cleanup] rows_with_blob_path=0
+### P2b-seed-5-formats
+CALL seed_formats(W:\store, 5 items, 60000B inline format)
+RESULT seed_formats=5/5
+STATE[after_seed_formats] count=5
+STATE[after_seed_formats] used_bytes=575
+STATE[after_seed_formats] integrity=ok
+STATE[after_seed_formats] blob_files=5 thumb_files=0 temp_files=0
+STATE[after_seed_formats] rows_with_blob_path=5
+### P2b-backdate-all-31d
+RESULT backdate_rows=5
+P2b free bytes after fill: 131072
+### P2b-cleanup-age-format-full
+CALL cleanup(W:\store, retention=30, cap=None)
+RESULT cleanup=ok removed=5 freed=575 (count before=5)
+STATE[post_cleanup] count=0
+STATE[post_cleanup] used_bytes=0
+STATE[post_cleanup] integrity=ok
+STATE[post_cleanup] blob_files=0 thumb_files=0 temp_files=0
+STATE[post_cleanup] rows_with_blob_path=0
+### P2c-seed-5-formats
+CALL seed_formats(W:\store, 5 items, 60000B inline format)
+RESULT seed_formats=5/5
+STATE[after_seed_formats] count=5
+STATE[after_seed_formats] used_bytes=575
+STATE[after_seed_formats] integrity=ok
+STATE[after_seed_formats] blob_files=5 thumb_files=0 temp_files=0
+STATE[after_seed_formats] rows_with_blob_path=5
+P2c free bytes after fill: 131072
+### P2c-cleanup-cap-format-full
+CALL cleanup(W:\store, retention=30, cap=Some(300))
+RESULT cleanup=ok removed=3 freed=345 (count before=5)
+STATE[post_cleanup] count=2
+STATE[post_cleanup] used_bytes=230
+STATE[post_cleanup] integrity=ok
+STATE[post_cleanup] blob_files=2 thumb_files=0 temp_files=0
+STATE[post_cleanup] rows_with_blob_path=2
+### P2d-cleanup-after-unfill
+CALL cleanup(W:\store, retention=30, cap=Some(300))
+RESULT cleanup=ok removed=0 freed=0 (count before=2)
+STATE[post_cleanup] count=2
+STATE[post_cleanup] used_bytes=230
+STATE[post_cleanup] integrity=ok
+STATE[post_cleanup] blob_files=2 thumb_files=0 temp_files=0
+STATE[post_cleanup] rows_with_blob_path=2
+=== PHASE 3: volume disconnected while running ===
+### P3-preseed
+CALL seed(W:\store, 20)
+RESULT seed=20/20
+STATE[after_seed] count=22
+STATE[after_seed] used_bytes=4500
+STATE[after_seed] integrity=ok
+STATE[after_seed] blob_files=22 thumb_files=0 temp_files=0
+STATE[after_seed] rows_with_blob_path=22
+P3 harness ready; dismounting
+P3 re-mounting
+--- P3 harness output ---
+CALL disconnect(W:\store, marker=C:\Rebuferization\scripts\storage\phase3.marker.txt)
+RESULT pre_dismount_insert=ok id=26
+READY_BEFORE_DISMOUNT
+MARKER=dismounted seen
+RESULT post_dismount_insert_ERR=io: Системе не удается найти указанный путь. (os error 3)
+RESULT post_dismount_list=ok rows=0
+RESULT post_dismount_cleanup=ok removed=0
+RESULT post_dismount_reopen_ERR=io: Системе не удается найти указанный путь. (os error 3)
+MARKER=remounted seen
+RESULT post_remount_insert_ERR=database: disk I/O error
+RESULT post_remount_list=ok rows=0
+RESULT post_remount_reopen_after_drop=ok
+RESULT post_remount_cleanup=ok removed=0
+RESULT post_remount_insert_fresh=ok id=27
+DONE
+=== PHASE 4: volume missing at startup ===
+### P4-store-open-missing-W
+CALL store_open(W:\store)
+RESULT store_open_ERR=io: ╨б╨╕╤Б╤В╨╡╨╝╨╡ ╨╜╨╡ ╤Г╨┤╨░╨╡╤В╤Б╤П ╨╜╨░╨╣╤В╨╕ ╤Г╨║╨░╨╖╨░╨╜╨╜╤Л╨╣ ╨┐╤Г╤В╤М. (os error 3)
+### P4-store-open-missing-W-root
+CALL store_open(W:\)
+RESULT store_open_ERR=io: ╨б╨╕╤Б╤В╨╡╨╝╨╡ ╨╜╨╡ ╤Г╨┤╨░╨╡╤В╤Б╤П ╨╜╨░╨╣╤В╨╕ ╤Г╨║╨░╨╖╨░╨╜╨╜╤Л╨╣ ╨┐╤Г╤В╤М. (os error 3)
+### P4-store-open-missing-Z
+CALL store_open(Z:\no-such-drive\store)
+RESULT store_open_ERR=io: ╨б╨╕╤Б╤В╨╡╨╝╨╡ ╨╜╨╡ ╤Г╨┤╨░╨╡╤В╤Б╤П ╨╜╨░╨╣╤В╨╕ ╤Г╨║╨░╨╖╨░╨╜╨╜╤Л╨╣ ╨┐╤Г╤В╤М. (os error 3)
+### P4-store-open-missing-subdir
+CALL store_open(C:\Users\reteren\AppData\Local\Temp\opencode\w38\no-such-dir\store)
+RESULT store_open=ok root_exists=true
+STATE[fresh] count=0
+STATE[fresh] used_bytes=0
+STATE[fresh] integrity=ok
+STATE[fresh] blob_files=0 thumb_files=0 temp_files=0
+STATE[fresh] rows_with_blob_path=0
+=== PHASE 5: relocation ===
+### P5-seed-src
+CALL seed(C:\Users\reteren\AppData\Local\Temp\opencode\w38\reloc-src, 40)
+RESULT seed=40/40
+STATE[after_seed] count=40
+STATE[after_seed] used_bytes=8550
+STATE[after_seed] integrity=ok
+STATE[after_seed] blob_files=40 thumb_files=0 temp_files=0
+STATE[after_seed] rows_with_blob_path=40
+P5 target free bytes: 139264
+### P5-relocate-to-small-target
+CALL relocate(C:\Users\reteren\AppData\Local\Temp\opencode\w38\reloc-src, W:\reloc-target)
+RESULT relocate_src_exists_before=true
+RESULT relocate_ERR=database: disk I/O error
+RESULT relocate_src_exists_after=true
+RESULT relocate_dst_exists=true
+RESULT relocate_dst_has_db=true
+STATE[post_relocate_target] count=0
+STATE[post_relocate_target] used_bytes=0
+STATE[post_relocate_target] integrity=ok
+STATE[post_relocate_target] blob_files=0 thumb_files=0 temp_files=0
+STATE[post_relocate_target] rows_with_blob_path=0
+### P5-src-intact-after-refuse
+CALL store_open(C:\Users\reteren\AppData\Local\Temp\opencode\w38\reloc-src)
+RESULT store_open=ok root_exists=true
+STATE[fresh] count=40
+STATE[fresh] used_bytes=8550
+STATE[fresh] integrity=ok
+STATE[fresh] blob_files=40 thumb_files=0 temp_files=0
+STATE[fresh] rows_with_blob_path=40
+### P5-relocate-preexisting-target
+CALL relocate(C:\Users\reteren\AppData\Local\Temp\opencode\w38\reloc-src, W:\reloc-target-preexisting)
+RESULT relocate_src_exists_before=true
+RESULT relocate_ERR=Target volume has insufficient free space (available: 0 bytes, required: 142970 bytes)
+RESULT relocate_src_exists_after=true
+RESULT relocate_dst_exists=true
+RESULT relocate_dst_has_db=false
+RESULT relocate_dst_reopen_ERR
+### P5-src-intact-after-preexisting
+CALL store_open(C:\Users\reteren\AppData\Local\Temp\opencode\w38\reloc-src)
+RESULT store_open=ok root_exists=true
+STATE[fresh] count=40
+STATE[fresh] used_bytes=8550
+STATE[fresh] integrity=ok
+STATE[fresh] blob_files=40 thumb_files=0 temp_files=0
+STATE[fresh] rows_with_blob_path=40
+### P5-seed-src2
+CALL seed(C:\Users\reteren\AppData\Local\Temp\opencode\w38\reloc-src2, 30)
+RESULT seed=30/30
+STATE[after_seed] count=30
+STATE[after_seed] used_bytes=6410
+STATE[after_seed] integrity=ok
+STATE[after_seed] blob_files=30 thumb_files=0 temp_files=0
+STATE[after_seed] rows_with_blob_path=30
+### P5-relocate-to-roomy-target
+CALL relocate(C:\Users\reteren\AppData\Local\Temp\opencode\w38\reloc-src2, W:\reloc-target2)
+RESULT relocate_src_exists_before=true
+RESULT relocate=ok
+RESULT relocate_src_exists_after=false
+RESULT relocate_dst_exists=true
+RESULT relocate_dst_has_db=true
+STATE[post_relocate_target] count=30
+STATE[post_relocate_target] used_bytes=6410
+STATE[post_relocate_target] integrity=ok
+STATE[post_relocate_target] blob_files=30 thumb_files=0 temp_files=0
+STATE[post_relocate_target] rows_with_blob_path=30
+### P5-relocate-to-missing-drive
+CALL relocate(C:\Users\reteren\AppData\Local\Temp\opencode\w38\reloc-src, Z:\no-such-drive\target)
+RESULT relocate_src_exists_before=true
+RESULT relocate_ERR=io: ╨б╨╕╤Б╤В╨╡╨╝╨╡ ╨╜╨╡ ╤Г╨┤╨░╨╡╤В╤Б╤П ╨╜╨░╨╣╤В╨╕ ╤Г╨║╨░╨╖╨░╨╜╨╜╤Л╨╣ ╨┐╤Г╤В╤М. (os error 3)
+RESULT relocate_src_exists_after=true
+RESULT relocate_dst_exists=false
+=== cleanup ===
+done. log: C:\Rebuferization\scripts\storage\out\log.txt

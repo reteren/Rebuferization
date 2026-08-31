@@ -1,0 +1,16 @@
+[package]
+name = "storage-harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The real Rebuffer store code, reused as a library. The single-instance
+# plugin and the hardcoded %APPDATA%\Rebuffer\settings.json path make a
+# second *app* instance impossible without disturbing the live user, so this
+# harness drives the exact same Store/janitor code at a path we control.
+rebuffer = { path = "../../src-tauri" }
+tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"] }

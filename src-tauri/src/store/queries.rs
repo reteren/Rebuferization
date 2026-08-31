@@ -803,19 +803,38 @@ pub fn clear_history(
     let mut removed_items = 0i64;
     let mut freed_bytes = 0i64;
 
-    for (id, hash, blob_path, thumb_path, byte_size, is_ref) in rows {
-        conn.execute("DELETE FROM items WHERE id = ?1", [id])?;
-        if is_ref == 0 {
-            delete_blob_if_unreferenced(
-                conn,
-                root,
-                &hash,
-                blob_path.as_deref(),
-                thumb_path.as_deref(),
-            )?;
+    // Every DELETE used to be its own implicit transaction, so clearing 10,000
+    // items meant 10,000 separate commits — each one an fsync — plus two COUNT
+    // queries per row for the refcount. It took long enough that the settings
+    // window looked frozen and the user concluded the button did nothing.
+    //
+    // The rows go in one transaction, and the files are collected first and
+    // unlinked after it commits: filesystem work does not belong inside a
+    // database transaction, and a blob deleted before the commit would be lost
+    // if the commit then failed.
+    let mut to_unlink: Vec<(String, Option<String>, Option<String>)> = Vec::new();
+    {
+        let tx = conn.unchecked_transaction()?;
+        for (id, hash, blob_path, thumb_path, byte_size, is_ref) in rows {
+            tx.execute("DELETE FROM items WHERE id = ?1", [id])?;
+            if is_ref == 0 {
+                to_unlink.push((hash, blob_path, thumb_path));
+            }
+            removed_items += 1;
+            freed_bytes += byte_size;
         }
-        removed_items += 1;
-        freed_bytes += byte_size;
+        tx.commit()?;
+    }
+
+    for (hash, blob_path, thumb_path) in &to_unlink {
+        // The rows are already gone, so the refcount check now sees the truth.
+        delete_blob_if_unreferenced(
+            conn,
+            root,
+            hash,
+            blob_path.as_deref(),
+            thumb_path.as_deref(),
+        )?;
     }
 
     if include_pinned {

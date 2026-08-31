@@ -7,6 +7,7 @@
   import {
     clearHistory,
     exportData,
+    getClipboardHistoryEnabled,
     getStorageStats,
     importData,
     onItemAdded,
@@ -16,6 +17,7 @@
     relocateStore,
     runCleanupNow,
     setCaptureEnabled,
+    setClipboardHistoryEnabled,
     type UnlistenFn,
   } from '../lib/ipc'
   import { settings } from '../lib/stores/settings.svelte'
@@ -80,6 +82,8 @@
   let importMode = $state<ImportMode>('merge')
   let confirmClear = $state(false)
   let confirmReset = $state(false)
+  // Live Windows clipboard-history state (Win+V). null = not yet read.
+  let clipboardHistory = $state<boolean | null>(null)
 
   const usageSegments = $derived.by(() => {
     const s = stats
@@ -109,9 +113,20 @@
     void onItemAdded(() => refreshStats()).then((fn) => statListeners.push(fn))
     void onItemsDeleted(() => refreshStats()).then((fn) => statListeners.push(fn))
     void onStorageWarning(() => refreshStats()).then((fn) => statListeners.push(fn))
+    // Windows clipboard history is OS state the user can change in Windows
+    // Settings; re-read it every time this window is (re)shown so the toggle
+    // reflects reality rather than a stale first read.
+    refreshClipboardHistory()
+    const onWindowVisible = (): void => {
+      if (document.visibilityState === 'visible') refreshClipboardHistory()
+    }
+    document.addEventListener('visibilitychange', onWindowVisible)
+    window.addEventListener('focus', onWindowVisible)
     return () => {
       unlisten?.()
       for (const fn of statListeners) fn()
+      document.removeEventListener('visibilitychange', onWindowVisible)
+      window.removeEventListener('focus', onWindowVisible)
     }
   })
 
@@ -119,6 +134,12 @@
   // leave the panel lying when the user finally navigates to it.
   $effect(() => {
     if (section === 'storage') void refreshStats()
+  })
+
+  // Landing on General re-reads the live system state too, so the toggle is
+  // never an echo of a value the user changed elsewhere.
+  $effect(() => {
+    if (section === 'general') refreshClipboardHistory()
   })
 
   $effect(() => {
@@ -163,6 +184,37 @@
       })
       .catch(() => {
         // Backend not reachable yet (parallel build); retry on next action.
+      })
+  }
+
+  /** Reads the live Windows clipboard-history state; null stays until the
+   * first successful read so the toggle never flips from an unknown state. */
+  function refreshClipboardHistory(): void {
+    getClipboardHistoryEnabled()
+      .then((enabled) => {
+        clipboardHistory = enabled
+      })
+      .catch((err) => {
+        // Keep the last known value; a failed read is not a reason to claim a
+        // state. Surface it so the user knows the toggle may be stale.
+        error = `Could not read Windows clipboard history: ${String(err)}`
+      })
+  }
+
+  /** Writes the toggle to Windows and only shows it as toggled once the write
+   * succeeded; a failed write reverts the control and explains itself. */
+  function onClipboardHistoryChange(checked: boolean): void {
+    const before = clipboardHistory
+    clipboardHistory = checked
+    setClipboardHistoryEnabled(checked)
+      .then(() => {
+        // The write is explicit; show what we wrote. The next window-show
+        // re-reads and would correct any drift.
+        clipboardHistory = checked
+      })
+      .catch((err) => {
+        clipboardHistory = before
+        error = `Could not change Windows clipboard history: ${String(err)}`
       })
   }
 
@@ -430,6 +482,25 @@ function resetEverything(): void {
             compares a combination and posts a message — it never logs.
           </p>
         {/if}
+
+        <div class="field">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              checked={clipboardHistory ?? false}
+              disabled={clipboardHistory === null}
+              onchange={(e) => onClipboardHistoryChange(e.currentTarget.checked)}
+            />
+            <span>Windows clipboard history (Win+V)</span>
+          </label>
+          <p class="hint">
+            Turns Windows' own clipboard history on or off — the panel Win+V opens. It applies to
+            the current Windows user only, not other accounts. While it is off, Win+V no longer
+            opens Windows' clipboard history. Rebuffer's own clipboard capture is separate and
+            keeps working either way. Turning it on writes an explicit “on” value, the same way the
+            Windows Settings app does.
+          </p>
+        </div>
 
         <label class="toggle">
           <input

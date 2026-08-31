@@ -96,6 +96,19 @@ export function getSettings(): Promise<Settings> {
   return invoke<Settings>('get_settings')
 }
 
+/** Live state of Windows clipboard history (Win+V) for this user. OS state,
+ * not a stored preference — it lives in HKCU, and settings.json must never
+ * shadow it. */
+export function getClipboardHistoryEnabled(): Promise<boolean> {
+  return invoke<boolean>('get_clipboard_history_enabled')
+}
+
+/** Enables or disables Windows clipboard history (Win+V) by writing an
+ * explicit HKCU DWORD (1 or 0), never by deleting the value. */
+export function setClipboardHistoryEnabled(enabled: boolean): Promise<void> {
+  return invoke<void>('set_clipboard_history_enabled', { enabled })
+}
+
 export function updateSettings(patch: SettingsPatch): Promise<Settings> {
   return invoke<Settings>('update_settings', { patch })
 }

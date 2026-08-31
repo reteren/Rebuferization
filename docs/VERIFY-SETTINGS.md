@@ -305,3 +305,49 @@ against a running binary per the lock rule.
 08-stress-all-changed.png. Snapshot state (settings.json / Run key / log
 position / test-item ids) under scripts/settings/snapshot/; test rows deleted
 and settings.json + Run key restored by 09-restore.ps1.
+
+---
+
+## W36 — Windows clipboard history helper (Win+V)
+
+SPEC §4 / ROADMAP Phase 6: the in-app one-click helper to disable Windows' own
+clipboard history. The installer already offers it; this adds the in-app
+control so a user who declined at install (or installed before the option
+existed) can reach it.
+
+**Built (files: `src-tauri/src/settings.rs`, `src-tauri/src/commands.rs`,
+`src/routes/Settings.svelte`, `src/lib/ipc.ts`):**
+- `settings::clipboard_history_enabled()` reads
+  `HKCU\Software\Microsoft\Clipboard\EnableClipboardHistory`; absence is
+  detected with `ERROR_FILE_NOT_FOUND` (not by comparing the value to zero —
+  the exact bug the installer had) and ABSENT means enabled, like Windows.
+- `settings::set_clipboard_history_enabled(bool)` writes an explicit DWORD
+  (1 or 0) — never deletes the value — matching what the Windows Settings UI
+  writes.
+- Commands `get_clipboard_history_enabled` / `set_clipboard_history_enabled`
+  wrap them; `ipc.ts` mirrors both.
+- Settings General section, next to the hotkey: a toggle that reflects the live
+  system value (re-read on window show/focus, on visibility change, and on
+  landing on the General section — it is OS state, never a settings.json
+  shadow), disabled until the first read lands, with plain-language copy
+  (current-Windows-user-only; Win+V stops working while off; Rebuffer capture
+  is separate). A failed write reverts the toggle and surfaces the error.
+- Unit tests pin the state mapping: ABSENT → enabled, 1 → enabled, 0 →
+  disabled, any other value → enabled (4 tests, passing).
+
+**Blocked on the coordinator:** the two commands are defined but are NOT yet
+invokable because `generate_handler!` in `src-tauri/src/lib.rs` (coordinator-
+owned, outside this task's write scope) does not list them. The frontend
+`invoke`s will fail with "command not found" until
+`commands::get_clipboard_history_enabled` and
+`commands::set_clipboard_history_enabled` are added to the invoke_handler.
+This was asked and escalated; the coordinator was unreachable at the time, so
+the edit was intentionally left for them. Everything else compiles and all four
+checks are clean.
+
+**Verified:** `cargo check --all-targets` (warning-free), `cargo test` (13 store
+tests + 4 new mapping tests), `npx tsc --noEmit`, `npx svelte-check` — all at
+zero errors/warnings. **Not verified without running the app:** the live read /
+write against the real registry, the toggle rendering, the re-read on show,
+and the error path on a policy-blocked write — none were exercised because
+rebuffer.exe must not be launched while the user is using it.
