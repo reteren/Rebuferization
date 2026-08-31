@@ -642,13 +642,11 @@
         title="Settings"
         onclick={() => void showSettingsWindow()}
       >
-        <!-- Stroked, not filled: at this size a solid gear turns to mush,
-             while strokes with round joins stay crisp. -->
-        <svg viewBox="0 0 24 24" width="35" height="35" aria-hidden="true"
-             fill="none" stroke="currentColor" stroke-width="1.6"
-             stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3.1" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        <!-- The user's gear, traced from their reference: eight teeth at 45
+             degrees, body radius 272/384 of the tip, hole 131/384. Filled and
+             drawn with currentColor so it follows whatever theme is active. -->
+        <svg viewBox="0 0 24 24" width="32" height="32" aria-hidden="true">
+          <path fill="currentColor" fill-rule="evenodd" d="M9.94 3.75 L9.82 0.23 L14.18 0.23 L14.06 3.75 A8.50 8.50 0 0 1 16.38 4.71 L18.78 2.14 L21.86 5.22 L19.29 7.62 A8.50 8.50 0 0 1 20.25 9.94 L23.77 9.82 L23.77 14.18 L20.25 14.06 A8.50 8.50 0 0 1 19.29 16.38 L21.86 18.78 L18.78 21.86 L16.38 19.29 A8.50 8.50 0 0 1 14.06 20.25 L14.18 23.77 L9.82 23.77 L9.94 20.25 A8.50 8.50 0 0 1 7.62 19.29 L5.22 21.86 L2.14 18.78 L4.71 16.38 A8.50 8.50 0 0 1 3.75 14.06 L0.23 14.18 L0.23 9.82 L3.75 9.94 A8.50 8.50 0 0 1 4.71 7.62 L2.14 5.22 L5.22 2.14 L7.62 4.71 Z M16.09 12.00 A4.09 4.09 0 1 0 7.91 12.00 A4.09 4.09 0 1 0 16.09 12.00 Z" />
         </svg>
       </button>
       <ZoomDial value={zoom} onchange={onZoomChange} />

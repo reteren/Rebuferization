@@ -21,7 +21,15 @@
     type UnlistenFn,
   } from '../lib/ipc'
   import { settings } from '../lib/stores/settings.svelte'
-  import type { CleanupResult, ImportMode, SettingsPatch, StorageStats, StoreProgress } from '../lib/types'
+  import { THEMES, THEME_LABELS } from '../lib/types'
+  import type {
+    CleanupResult,
+    ImportMode,
+    SettingsPatch,
+    StorageStats,
+    StoreProgress,
+    Theme,
+  } from '../lib/types'
 
   const MB = 1024 * 1024
 
@@ -689,6 +697,22 @@ function resetEverything(): void {
     {:else if section === 'appearance'}
       <section>
         <h2>Appearance</h2>
+
+        <div class="field">
+          <label class="field-label">
+            Theme
+            <select
+              value={settings.current.appearance.theme}
+              onchange={(e) =>
+                patch({ appearance: { theme: e.currentTarget.value as Theme } })}
+            >
+              {#each THEMES as t}
+                <option value={t}>{THEME_LABELS[t]}</option>
+              {/each}
+            </select>
+          </label>
+          <p class="hint">Applies to both windows immediately.</p>
+        </div>
 
         <div class="field">
           <span class="field-label">Popup window size</span>

@@ -1,0 +1,66 @@
+/* Theme: black — a true OLED-black theme.
+   Contract per docs/THEMES.md: one :root[data-theme="black"] block, colour
+   tokens only. --accent-soft / --accent-strong / --danger-soft derive via
+   color-mix from --accent / --danger and are intentionally NOT redefined.
+   --bg-0 is pure #000; every surface lifts off it in small, cool-tinted steps
+   so cards separate without any of them reading as grey. */
+
+:root[data-theme="black"] {
+  color-scheme: dark;
+
+  /* ---- surfaces: true black, then small deliberate lifts -------------- */
+  --bg-0: #000000;                            /* OLED black backdrop, pixels off */
+  --bg-1: rgba(6, 7, 9, 0.85);                /* window wash, still near-black */
+  --surface-1: rgba(13, 14, 19, 0.9);         /* cards: one step off pure black */
+  --surface-2: rgba(20, 21, 28, 0.93);        /* raised controls */
+  --surface-3: rgba(27, 29, 38, 0.96);        /* popovers */
+  --surface-4: rgba(34, 37, 47, 0.98);        /* hovered controls */
+  --swatch-empty: #20232c;                    /* color-preview fallback swatch */
+
+  /* ---- overlays ------------------------------------------------------- */
+  --overlay-1: rgba(255, 255, 255, 0.05);     /* card hover veil / chip fills */
+  --scrim-1: rgba(0, 0, 0, 0.6);              /* dark scrim: play button, chip */
+  --scrim-2: rgba(0, 0, 0, 0.65);             /* dark scrim: badges over previews */
+
+  /* ---- borders: slightly brighter than default so they read on pure black */
+  --border-1: rgba(255, 255, 255, 0.09);
+  --border-2: rgba(255, 255, 255, 0.16);
+  --border-3: rgba(255, 255, 255, 0.26);
+  --window-border: rgba(255, 255, 255, 0.1);
+  --border-media-1: rgba(255, 255, 255, 0.16);
+  --border-media-2: rgba(255, 255, 255, 0.22);
+
+  /* ---- text ----------------------------------------------------------- */
+  --text-1: #eef0f6;
+  --text-2: rgba(238, 240, 246, 0.66);        /* 4.5:1+ on pure black */
+  --text-3: rgba(238, 240, 246, 0.4);
+  --text-bright: #ffffff;
+
+  /* ---- accent: a cool blue in the app's family, chosen to pop on black */
+  --accent: #6ea9ff;
+  --on-accent: #060a12;                       /* near-black text on the blue */
+
+  /* ---- ext hues: 7 distinct file-type labels, none near the blue accent */
+  --ext-1: #3ddc9f;                           /* green */
+  --ext-2: #2bc8d8;                           /* cyan */
+  --ext-3: #c08cf7;                           /* purple */
+  --ext-4: #f5a24f;                           /* amber */
+  --ext-5: #f76fa9;                           /* rose */
+  --ext-6: #a9db4f;                           /* lime */
+  --ext-7: #f2cf4f;                           /* yellow */
+
+  /* ---- status --------------------------------------------------------- */
+  --danger: #f7698a;
+  --ok: #33d17a;
+  --warn: #f5a24f;
+
+  /* ---- shadows: pure black needs pure dark shadows for edge depth ------ */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.55);
+  --shadow-2: 0 10px 30px rgba(0, 0, 0, 0.65);
+  --shadow-3: 0 18px 60px rgba(0, 0, 0, 0.75);
+
+  /* ---- window wash: a whisper of cool light so the black isn't flat ------ */
+  --window-wash:
+    radial-gradient(130% 90% at 8% -12%, rgba(110, 169, 255, 0.05), transparent 55%),
+    radial-gradient(110% 80% at 96% 112%, rgba(61, 220, 159, 0.03), transparent 55%);
+}

@@ -1,6 +1,29 @@
 // Mirror of src-tauri/src/model.rs and settings.rs. Change one, change both.
 // Serde is configured camelCase, so field names match exactly.
 
+/// Selectable themes. 'dark' is the built-in one defined on :root; every other
+/// name has a file under lib/styles/themes/ and is applied via data-theme.
+export const THEMES = [
+  'dark',
+  'black',
+  'light',
+  'grey',
+  'blue',
+  'dark-green',
+  'dark-purple',
+] as const
+export type Theme = (typeof THEMES)[number]
+
+export const THEME_LABELS: Record<Theme, string> = {
+  dark: 'Dark',
+  black: 'Black',
+  light: 'Light',
+  grey: 'Grey',
+  blue: 'Blue',
+  'dark-green': 'Dark green',
+  'dark-purple': 'Dark purple',
+}
+
 export type Kind = 'text' | 'image' | 'video' | 'file' | 'other'
 export type SubKind = 'plain' | 'rich' | 'code' | 'link' | 'color' | 'animated'
 
@@ -152,6 +175,7 @@ export interface Settings {
     captureEnabled: boolean
   }
   appearance: {
+    theme: Theme
     showAge: boolean
     formatLabelSize: 'off' | 'small' | 'medium' | 'large'
     animateGifs: boolean

@@ -84,6 +84,10 @@ pub struct BehaviorSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppearanceSettings {
+    /// Theme name: "dark" (built in) or one of the files under
+    /// src/lib/styles/themes/. Unknown values fall back to "dark" rather than
+    /// leaving the UI unstyled.
+    pub theme: String,
     pub show_age: bool,
     /// `"off"` | `"small"` | `"medium"` | `"large"`.
     pub format_label_size: String,
@@ -164,6 +168,7 @@ impl Default for BehaviorSettings {
 impl Default for AppearanceSettings {
     fn default() -> Self {
         AppearanceSettings {
+            theme: "dark".into(),
             show_age: true,
             format_label_size: "medium".into(),
             animate_gifs: true,

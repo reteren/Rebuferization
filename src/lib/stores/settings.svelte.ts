@@ -3,11 +3,20 @@
 // settings.json shows up without a reload.
 
 import { getSettings, onSettingsChanged, updateSettings } from '../ipc'
-import type { Settings, SettingsPatch } from '../types'
+import { THEMES, type Settings, type SettingsPatch, type Theme } from '../types'
 
 /** Mirrors the appearance fields that drive document-level styling. */
 function applyAppearance(a: Settings['appearance']): void {
   const root = document.documentElement
+
+  // An unknown name would leave data-theme pointing at a block that does not
+  // exist, and the UI would silently keep the previous theme's colours; fall
+  // back to the built-in dark instead. 'dark' IS :root, so it carries no
+  // attribute.
+  const theme: Theme = (THEMES as readonly string[]).includes(a.theme) ? (a.theme as Theme) : 'dark'
+  if (theme === 'dark') root.removeAttribute('data-theme')
+  else root.setAttribute('data-theme', theme)
+
   // Every var(--accent) reference in tokens.css and the components follows
   // this; --accent-soft / --accent-strong derive from it via color-mix.
   root.style.setProperty('--accent', a.accent)
@@ -48,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
     formatLabelSize: 'medium',
     animateGifs: true,
     reduceMotion: false,
+    theme: 'dark',
     accent: '#7aa2ff',
   },
   privacy: {

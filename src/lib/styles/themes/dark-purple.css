@@ -1,0 +1,66 @@
+/* Theme: dark purple — see docs/THEMES.md for the contract.
+   Deep violet surfaces, rich rather than neon. The default accent and several
+   ext hues are already purple-ish, so the accent moves to a cyan-leaning blue
+   and the purple ext hue shifts warm, keeping both separable from the ground. */
+:root[data-theme="dark-purple"] {
+  color-scheme: dark;
+
+  /* ---- surfaces ------------------------------------------------------ */
+  --bg-0: #14101f;
+  --bg-1: rgba(26, 20, 40, 0.72);
+  --surface-1: rgba(38, 29, 58, 0.78);
+  --surface-2: rgba(45, 34, 68, 0.82);
+  --surface-3: rgba(55, 42, 82, 0.92);
+  --surface-4: rgba(66, 50, 98, 0.95);
+  --swatch-empty: #453963;
+  --window-wash: radial-gradient(120% 100% at 50% 0%, rgba(120, 88, 190, 0.16), transparent 70%);
+
+  /* ---- overlays ------------------------------------------------------ */
+  /* Warm-white rather than neutral: a neutral wash reads grey over violet. */
+  --overlay-1: rgba(232, 220, 255, 0.07);
+  /* Scrims sit over the user's own images, so they stay near-neutral dark and
+     independent of the theme's hue — a violet scrim tints their photos. */
+  --scrim-1: rgba(10, 8, 16, 0.58);
+  --scrim-2: rgba(12, 9, 19, 0.58);
+
+  /* ---- borders ------------------------------------------------------- */
+  --border-1: rgba(226, 214, 255, 0.08);
+  --border-2: rgba(226, 214, 255, 0.15);
+  --border-3: rgba(226, 214, 255, 0.24);
+  --window-border: rgba(226, 214, 255, 0.10);
+  --border-media-1: rgba(255, 255, 255, 0.14);
+  --border-media-2: rgba(255, 255, 255, 0.18);
+
+  /* ---- text ---------------------------------------------------------- */
+  /* #EFEAF8 on #14101F is 15.1:1; text-2 at 62% lands near 8.4:1. */
+  --text-1: #efeaf8;
+  --text-2: rgba(239, 234, 248, 0.64);
+  --text-3: rgba(239, 234, 248, 0.40);
+  --text-bright: #ffffff;
+
+  /* ---- accent -------------------------------------------------------- */
+  /* Cyan-leaning: a violet accent would disappear into these surfaces, and
+     the accent is what marks the item currently on the clipboard. */
+  --accent: #6fd3e8;
+  --on-accent: #06141a;
+
+  /* ---- ext palette --------------------------------------------------- */
+  --ext-1: #8fb8ff;
+  --ext-2: #58d3b4;
+  --ext-3: #e6a2ff;  /* the purple hue, pushed pink so it clears the ground */
+  --ext-4: #f0bd6e;
+  --ext-5: #ff8098;
+  --ext-6: #63c9f0;
+  --ext-7: #a9dc76;
+
+  /* ---- status -------------------------------------------------------- */
+  --danger: #ff7d95;
+  --ok: #5fd6ae;
+  --warn: #f0bd6e;
+
+  /* ---- shadows ------------------------------------------------------- */
+  /* Tinted violet-black: neutral black over violet reads as a grey halo. */
+  --shadow-1: 0 1px 2px rgba(10, 6, 20, 0.45);
+  --shadow-2: 0 10px 30px rgba(10, 6, 20, 0.55);
+  --shadow-3: 0 18px 60px rgba(10, 6, 20, 0.65);
+}

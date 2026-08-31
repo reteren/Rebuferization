@@ -1,0 +1,4 @@
+/* Theme: light — see docs/THEMES.md for the contract.
+   One block, colour tokens only. Structural tokens stay shared. */
+:root[data-theme="light"] {
+}
