@@ -39,6 +39,12 @@ export function getTabCounts(): Promise<TabCounts> {
   return invoke<TabCounts>('get_tab_counts')
 }
 
+/// The item sitting on the clipboard right now, or null when we cannot know —
+/// after a restart, or when something we never captured was copied.
+export function getCurrentClipboardId(): Promise<number | null> {
+  return invoke<number | null>('get_current_clipboard_id')
+}
+
 // ---------------------------------------------------------------------------
 // mutate
 // ---------------------------------------------------------------------------
@@ -154,6 +160,11 @@ export function popupReady(): Promise<void> {
 // ---------------------------------------------------------------------------
 // events — payloads mirror model.rs `events` emissions
 // ---------------------------------------------------------------------------
+
+/// Fires with the id of the item that just became the clipboard's contents.
+export function onClipboardCurrent(cb: (id: number) => void): Promise<UnlistenFn> {
+  return listen<number>(EVENTS.clipboardCurrent, (e) => cb(e.payload))
+}
 
 export function onItemAdded(cb: (item: ItemDto) => void): Promise<UnlistenFn> {
   return listen<ItemDto>(EVENTS.itemAdded, (e) => cb(e.payload))

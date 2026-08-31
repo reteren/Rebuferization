@@ -8,6 +8,8 @@
     zoom: number
     showAge: boolean
     formatLabelSize: 'off' | 'small' | 'medium' | 'large'
+    /// This item is what the clipboard holds right now.
+    isCurrent?: boolean
     animateGifs: boolean
     style?: string
     onactivate?: (item: ItemDto) => void
@@ -15,7 +17,7 @@
     ontoggle?: (item: ItemDto, mode: 'single' | 'ctrl' | 'shift') => void
   }
 
-  let { item, selected, focused, zoom, showAge, formatLabelSize, animateGifs, style, onactivate, oncontextmenu, ontoggle }: Props =
+  let { item, selected, focused, zoom, showAge, formatLabelSize, animateGifs, isCurrent = false, style, onactivate, oncontextmenu, ontoggle }: Props =
     $props()
 
   // Two-level fallback, so a broken source never shows a broken-image glyph:
@@ -145,6 +147,7 @@
   class="card"
   class:selected
   class:focused
+  class:current={isCurrent}
   class:missing={item.missing}
   style={style}
   role="gridcell"
@@ -226,12 +229,45 @@
     {/if}
   </div>
 
+  {#if isCurrent}
+    <span class="badge live">right now in buffer</span>
+  {/if}
+
   {#if formatLabelSize !== 'off'}
     <span class="badge fmt" style="--label-fs:{labelFont}">{formatLabel}</span>
   {/if}
 </div>
 
 <style>
+  /* The one item the clipboard actually holds. A ring rather than a fill, so
+     the preview underneath stays readable, and it sits above the hover and
+     selection rings because it is a statement of fact rather than of intent. */
+  .card.current {
+    box-shadow:
+      0 0 0 2px var(--accent),
+      0 0 12px -2px var(--accent);
+  }
+
+  .badge.live {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    max-width: calc(100% - 8px);
+    padding: 2px 6px;
+    border-radius: var(--r-pill);
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: var(--fs-2xs);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1.2;
+    text-transform: lowercase;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+  }
+
   .card {
     position: relative;
     background: var(--surface-1);

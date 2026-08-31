@@ -20,8 +20,10 @@
     beginDrag,
     copyToClipboard,
     deleteItems,
+    getCurrentClipboardId,
     getStorageStats,
     hidePopup,
+    onClipboardCurrent,
     onStorageWarning,
     openItem,
     openItemWith,
@@ -100,6 +102,8 @@
     },
   )
 
+  let currentClipboardId = $state<number | null>(null)
+
   $effect(() => {
     // Runs once: untrack keeps tab/sort/query changes from re-firing this
     // block, which would stack a new storage-warning listener per keystroke.
@@ -109,6 +113,21 @@
       void refreshStats()
       void popupReady()
     })
+    let unlistenCurrent: UnlistenFn | null = null
+    // Which item the clipboard holds now. Asked once at startup, then kept
+    // current by the event — the backend knows at exactly two moments, a
+    // capture landing and a write we made ourselves.
+    untrack(() => {
+      void getCurrentClipboardId().then((id) => {
+        currentClipboardId = id
+      })
+    })
+    void onClipboardCurrent((id) => {
+      currentClipboardId = id
+    }).then((fn) => {
+      unlistenCurrent = fn
+    })
+
     let unlisten: UnlistenFn | null = null
     void onStorageWarning((w) => {
       warning = {
@@ -125,6 +144,7 @@
     })
     return () => {
       unlisten?.()
+      unlistenCurrent?.()
     }
   })
 
@@ -361,7 +381,11 @@
 
   function sameFilter(a: Filter, b: Filter): boolean {
     return (
-      a.kind === b.kind && a.ext === b.ext && a.pinnedOnly === b.pinnedOnly && a.subKind === b.subKind
+      a.kind === b.kind &&
+      a.ext === b.ext &&
+      a.pinnedOnly === b.pinnedOnly &&
+      a.subKind === b.subKind &&
+      a.referencesOnly === b.referencesOnly
     )
   }
 
@@ -601,6 +625,7 @@
         showAge={settings.current.appearance.showAge}
         formatLabelSize={settings.current.appearance.formatLabelSize}
         animateGifs={settings.current.appearance.animateGifs}
+        currentId={currentClipboardId}
         onactivate={onGridActivate}
         oncontextmenu={onCardContextMenu}
         ontoggle={onGridToggle}
@@ -611,7 +636,12 @@
   <footer class="footer">
     <StatusBar itemCount={tabCounts.all} totalBytes={stats?.totalBytes ?? 0} />
     <div class="corner">
-      <button class="icon-btn" aria-label="Open settings" onclick={() => void showSettingsWindow()}>
+      <button
+        class="icon-btn"
+        aria-label="Open settings"
+        title="Settings"
+        onclick={() => void showSettingsWindow()}
+      >
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
           <path
             fill="currentColor"

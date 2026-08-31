@@ -10,6 +10,8 @@
     selectedIds: Set<number>
     focusedId: number | null
     showAge: boolean
+    /// The item on the clipboard right now, marked as live in the grid.
+    currentId?: number | null
     formatLabelSize: string
     animateGifs: boolean
     onactivate?: (item: ItemDto) => void
@@ -24,6 +26,7 @@
     selectedIds,
     focusedId,
     showAge,
+    currentId = null,
     formatLabelSize,
     animateGifs,
     onactivate,
@@ -276,6 +279,7 @@
           focused={c.item.id === focusedId}
           zoom={z}
           showAge={showAge}
+          isCurrent={c.item.id === currentId}
           formatLabelSize={labelSize}
           animateGifs={animateGifs}
           style="position:absolute; left:{c.x}px; top:{c.y}px; width:{tileW}px; height:{tileH}px"

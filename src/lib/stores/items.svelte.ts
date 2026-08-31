@@ -254,6 +254,7 @@ class ItemsStore {
 
   private matchesFilter(item: ItemDto): boolean {
     const f = this.filter
+    if (f.referencesOnly && !item.isReference) return false
     if (f.pinnedOnly && !item.pinned) return false
     if (f.kind !== null && item.kind !== f.kind) return false
     if (f.subKind !== null && item.subKind !== f.subKind) return false

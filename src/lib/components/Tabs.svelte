@@ -1,13 +1,16 @@
 <script lang="ts">
   import type { TabId } from '../types'
 
-  const TABS: TabId[] = ['all', 'images', 'text', 'links', 'files', 'pinned']
+  // 'Added Files' sits next to 'Files' (both are the file-ish affordance — the
+  // shelf is filled through + Add) and before 'Pinned', the cross-cutting bucket.
+  const TABS: TabId[] = ['all', 'images', 'text', 'links', 'files', 'references', 'pinned']
   const LABELS: Record<TabId, string> = {
     all: 'All',
     images: 'Images',
     text: 'Text',
     links: 'Links',
     files: 'Files',
+    references: 'Added Files',
     pinned: 'Pinned',
   }
 
