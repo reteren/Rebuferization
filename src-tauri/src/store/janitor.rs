@@ -31,7 +31,19 @@ fn get_free_disk_space(path: &Path) -> Option<u64> {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
-    let path_str = path.to_str()?;
+    // GetDiskFreeSpaceExW fails on a path that does not exist yet, and the
+    // relocation target usually does not — which made the whole free-space
+    // guard silently return None and pass. Walk up to the nearest existing
+    // ancestor, which is on the same volume and is what we actually want to
+    // measure.
+    let mut probe = path;
+    while !probe.exists() {
+        match probe.parent() {
+            Some(parent) => probe = parent,
+            None => return None,
+        }
+    }
+    let path_str = probe.to_str()?;
     let wide: Vec<u16> = std::ffi::OsStr::new(path_str)
         .encode_wide()
         .chain(std::iter::once(0))

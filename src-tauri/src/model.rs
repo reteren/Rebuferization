@@ -258,4 +258,7 @@ pub mod events {
     /// Carries the id of the item now on the clipboard, so exactly one card can
     /// be marked as live.
     pub const CLIPBOARD_CURRENT: &str = "clipboard-current";
+    /// The configured store could not be opened and the app fell back to the
+    /// default root. Carries the path that failed, so the UI can name it.
+    pub const STORE_UNAVAILABLE: &str = "store-unavailable";
 }

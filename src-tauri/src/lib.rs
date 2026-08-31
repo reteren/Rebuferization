@@ -87,6 +87,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            use tauri::Emitter;
             let handle = app.handle().clone();
 
             // Logging comes first. settings.json always lives under the default
@@ -109,15 +110,40 @@ pub fn run() {
                 );
             }
 
-            // tauri.conf.json scopes the asset protocol to the default store
-            // under %APPDATA%. A relocated store lives somewhere else, so widen
-            // the scope at runtime or every thumbnail silently fails to load.
+            tracing::info!("rebuffer starting, store at {}", store_root.display());
+
+            // A configured store on a removable or network volume will one day
+            // be gone at startup. Failing here would be unrecoverable for the
+            // user: the tray icon never appears, so there is no way to open
+            // settings and correct the path. Fall back to the default root and
+            // say so loudly instead — a running app with an empty history can
+            // be fixed, one that refuses to launch cannot.
+            let (store, store_root) = match Store::open(&store_root) {
+                Ok(s) => (Arc::new(s), store_root),
+                Err(e) => {
+                    let fallback = settings::default_store_root();
+                    tracing::error!(
+                        "store at {} could not be opened ({e}); falling back to {}",
+                        store_root.display(),
+                        fallback.display()
+                    );
+                    let s = Arc::new(Store::open(&fallback)?);
+                    let _ = handle.emit(
+                        model::events::STORE_UNAVAILABLE,
+                        format!("{}", store_root.display()),
+                    );
+                    (s, fallback)
+                }
+            };
+
+            // Granted only now: tauri.conf.json scopes the asset protocol to
+            // the default store, a relocated one lives elsewhere, and doing
+            // this before the open would have widened the scope to the path
+            // that failed rather than the one actually in use — every
+            // thumbnail would then silently fail to load.
             if let Err(e) = handle.asset_protocol_scope().allow_directory(&store_root, true) {
                 tracing::warn!("could not grant asset access to {}: {e}", store_root.display());
             }
-
-            tracing::info!("rebuffer starting, store at {}", store_root.display());
-            let store = Arc::new(Store::open(&store_root)?);
 
             // The store deliberately does not read settings.json, so without
             // this it runs on its defaults — 30 days and no size cap — and a

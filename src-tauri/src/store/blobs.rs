@@ -83,11 +83,21 @@ pub fn write_blob(root: &Path, hash: &str, data: &[u8]) -> AppResult<String> {
     );
     let temp_path = parent.join(&temp_name);
 
+    // A `?` here used to leave the partial temp file behind for the rest of the
+    // session — it was only cleaned on the rename-error path — and a full disk
+    // is exactly when the write fails and exactly when the wasted bytes matter.
+    // The startup sweep would eventually collect it, but not before a restart.
     {
         use std::io::Write;
-        let mut file = std::fs::File::create(&temp_path)?;
-        file.write_all(data)?;
-        file.sync_all()?;
+        let write = (|| -> std::io::Result<()> {
+            let mut file = std::fs::File::create(&temp_path)?;
+            file.write_all(data)?;
+            file.sync_all()
+        })();
+        if let Err(e) = write {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(AppError::Io(e));
+        }
     }
 
     // Atomic rename into final location

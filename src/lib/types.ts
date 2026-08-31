@@ -183,4 +183,7 @@ export const EVENTS = {
   /// Carries the id of the item now on the clipboard, so exactly one card can
   /// be marked as live.
   clipboardCurrent: 'clipboard-current',
+  /// The configured store could not be opened; the app fell back to the
+  /// default root. Payload is the path that failed.
+  storeUnavailable: 'store-unavailable',
 } as const
