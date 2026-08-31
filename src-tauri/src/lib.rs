@@ -184,6 +184,8 @@ pub fn run() {
             commands::set_capture_enabled,
             commands::run_cleanup_now,
             commands::clear_history,
+            commands::get_clipboard_history_enabled,
+            commands::set_clipboard_history_enabled,
             commands::hide_popup,
             commands::show_settings_window,
             commands::popup_ready,
