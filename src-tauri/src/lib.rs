@@ -19,6 +19,7 @@ pub mod store;
 pub mod tray;
 pub mod window;
 
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use tauri::Manager;
@@ -26,6 +27,30 @@ use tauri::Manager;
 use crate::clipboard::ClipboardWatcher;
 use crate::settings::SettingsStore;
 use crate::store::Store;
+
+/// The item currently sitting on the clipboard, or 0 for "none we know of".
+///
+/// Every clipboard change is either a capture we just stored or a write we made
+/// ourselves, so the id is known at both moments; there is nowhere else it can
+/// come from. It is deliberately not persisted — after a restart the clipboard
+/// may hold anything, and claiming otherwise would be a lie on screen.
+static CURRENT_CLIPBOARD_ID: AtomicI64 = AtomicI64::new(0);
+
+/// Records which item is on the clipboard now, and tells the UI so it can mark
+/// the card.
+pub fn set_current_clipboard_id(app: &tauri::AppHandle, id: i64) {
+    if CURRENT_CLIPBOARD_ID.swap(id, Ordering::SeqCst) != id {
+        use tauri::Emitter;
+        let _ = app.emit(model::events::CLIPBOARD_CURRENT, id);
+    }
+}
+
+pub fn current_clipboard_id() -> Option<i64> {
+    match CURRENT_CLIPBOARD_ID.load(Ordering::SeqCst) {
+        0 => None,
+        id => Some(id),
+    }
+}
 
 /// Managed state, resolved by every command through `State<'_, AppState>`.
 pub struct AppState {
@@ -107,6 +132,8 @@ pub fn run() {
                 store.clone(),
                 Box::new(move |item| {
                     use tauri::Emitter;
+                    // A fresh capture IS what is on the clipboard right now.
+                    set_current_clipboard_id(&emit_handle, item.id);
                     let _ = emit_handle.emit(model::events::ITEM_ADDED, item);
                 }),
             )?);
@@ -184,6 +211,7 @@ pub fn run() {
             commands::set_capture_enabled,
             commands::run_cleanup_now,
             commands::clear_history,
+            commands::get_current_clipboard_id,
             commands::get_clipboard_history_enabled,
             commands::set_clipboard_history_enabled,
             commands::hide_popup,

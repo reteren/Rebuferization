@@ -72,11 +72,25 @@ pub fn get_storage_stats(state: State<'_, AppState>) -> AppResult<StorageStats> 
 
 #[tauri::command]
 pub fn copy_to_clipboard(
+    app: AppHandle,
     state: State<'_, AppState>,
     ids: Vec<i64>,
     plain_text: bool,
 ) -> AppResult<()> {
-    crate::clipboard::writer::write_items(&state.store, &ids, plain_text)
+    crate::clipboard::writer::write_items(&state.store, &ids, plain_text)?;
+    // We wrote it, so we know what is on the clipboard — the listener skips our
+    // own writes and would never report this one.
+    if let [id] = ids[..] {
+        crate::set_current_clipboard_id(&app, id);
+    }
+    Ok(())
+}
+
+/// The item currently on the clipboard, if we know. `None` after a restart, or
+/// when something we never captured was copied.
+#[tauri::command]
+pub fn get_current_clipboard_id() -> Option<i64> {
+    crate::current_clipboard_id()
 }
 
 #[tauri::command]
@@ -87,6 +101,9 @@ pub fn paste_to_previous_window(
     plain_text: bool,
 ) -> AppResult<()> {
     crate::clipboard::writer::write_items(&state.store, &ids, plain_text)?;
+    if let [id] = ids[..] {
+        crate::set_current_clipboard_id(&app, id);
+    }
     crate::window::hide_popup(&app)?;
     if state.settings.get().behavior.auto_paste {
         crate::window::paste::send_paste()?;

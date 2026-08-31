@@ -251,4 +251,7 @@ pub mod events {
     pub const SETTINGS_CHANGED: &str = "settings-changed";
     pub const STORE_PROGRESS: &str = "store-progress";
     pub const STORAGE_WARNING: &str = "storage-warning";
+    /// Carries the id of the item now on the clipboard, so exactly one card can
+    /// be marked as live.
+    pub const CLIPBOARD_CURRENT: &str = "clipboard-current";
 }

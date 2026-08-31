@@ -175,4 +175,7 @@ export const EVENTS = {
   settingsChanged: 'settings-changed',
   storeProgress: 'store-progress',
   storageWarning: 'storage-warning',
+  /// Carries the id of the item now on the clipboard, so exactly one card can
+  /// be marked as live.
+  clipboardCurrent: 'clipboard-current',
 } as const
