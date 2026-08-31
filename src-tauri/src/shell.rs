@@ -30,7 +30,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::{
     CF_HDROP, DoDragDrop, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, IDropSource,
-    IDropSource_Impl,
+    IDropSource_Impl, OleInitialize, OleUninitialize,
 };
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
@@ -69,6 +69,32 @@ impl ComScope {
 impl Drop for ComScope {
     fn drop(&mut self) {
         unsafe { CoUninitialize() }
+    }
+}
+
+/// OLE, not just COM. `DoDragDrop` needs the OLE subsystem — drag-and-drop and
+/// the OLE clipboard live there — and `CoInitializeEx` alone does not start it:
+/// the drag runs, every drop comes back `DROPEFFECT_NONE`, and the calls fail
+/// intermittently with `CO_E_NOTINITIALIZED`. `OleInitialize` initializes COM
+/// as a single-threaded apartment as well, so it replaces `ComScope` here
+/// rather than sitting alongside it.
+struct OleScope;
+
+impl OleScope {
+    fn init() -> AppResult<Self> {
+        // FFI: OleInitialize takes a reserved null pointer and is safe to call
+        // once per thread; the matching OleUninitialize runs in Drop.
+        unsafe {
+            OleInitialize(None).map_err(|e| AppError::Win(format!("OleInitialize failed: {e}")))?;
+        }
+        Ok(OleScope)
+    }
+}
+
+impl Drop for OleScope {
+    fn drop(&mut self) {
+        // FFI: balances the OleInitialize above on this same thread.
+        unsafe { OleUninitialize() }
     }
 }
 
@@ -592,8 +618,8 @@ pub fn begin_drag(store: &Store, ids: &[i64]) -> AppResult<()> {
 }
 
 fn run_drag(buffer: Vec<u8>) {
-    let _com = match ComScope::init() {
-        Ok(com) => com,
+    let _ole = match OleScope::init() {
+        Ok(ole) => ole,
         Err(e) => {
             tracing::error!("drag: {e}");
             return;
