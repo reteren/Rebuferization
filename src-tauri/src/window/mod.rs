@@ -72,7 +72,6 @@ unsafe extern "system" fn popup_subclass_proc(
     _uidsubclass: usize,
     _dwrefdata: usize,
 ) -> LRESULT {
-    tracing::info!("subclass msg={} w={} nc={}", umsg, wparam.0, NC_BUTTON_DOWN.load(Ordering::SeqCst));
     match umsg {
         WM_NCLBUTTONDOWN => {
             // Any press in the non-client area (the resize border) is an
@@ -131,11 +130,11 @@ fn persist_resized_size(app: AppHandle) {
         if scale <= 0.0 {
             return;
         }
-        let width = (size.width as f64 / scale).round();
-        let height = (size.height as f64 / scale).round();
-        if width < 1.0 || height < 1.0 {
-            return;
-        }
+        // As u32, not f64: `round()` yields a float, and serde_json then
+        // rejects the patch with "invalid type: floating point 546.0, expected
+        // u32". Every resize was silently discarded that way.
+        let width = (size.width as f64 / scale).round().max(1.0) as u32;
+        let height = (size.height as f64 / scale).round().max(1.0) as u32;
         let Some(state) = app.try_state::<AppState>() else {
             tracing::warn!("persist_resized_size: AppState not available");
             return;

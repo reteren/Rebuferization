@@ -21,9 +21,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::error::{AppError, AppResult};
 use crate::settings::WindowSettings;
 
-/// Sizes the popup per `settings.window` and places its top-left at the cursor,
-/// clamped so the whole window fits inside the work area of the monitor under
-/// the cursor. Never lands above the work area's left/top edges.
+/// Sizes the popup per `settings.window` and CENTERS it on the cursor, clamped
+/// so the whole window fits inside the work area of the monitor under the
+/// cursor. Never lands above the work area's left/top edges.
 pub fn place_popup(window: &WebviewWindow, ws: &WindowSettings) -> AppResult<()> {
     let hwnd = window.hwnd().map_err(tauri_err)?;
     let pt = cursor_point()?;
@@ -38,8 +38,17 @@ pub fn place_popup(window: &WebviewWindow, ws: &WindowSettings) -> AppResult<()>
     // clamp lets the left/top edge win.
     let (w, h) = clamp_size_to_work(w, h, &work);
 
-    // Top-left at the cursor, then clamp.
-    let (x, y) = clamp_pos_to_work(pt.x, pt.y, w as i32, h as i32, &work);
+    // Centered on the cursor, then clamped. Putting the top-left corner at the
+    // cursor meant the pointer landed in the window's corner and the content
+    // opened down-right of it; centering puts what you are pointing at under
+    // the pointer.
+    let (x, y) = clamp_pos_to_work(
+        pt.x - w as i32 / 2,
+        pt.y - h as i32 / 2,
+        w as i32,
+        h as i32,
+        &work,
+    );
 
     // SetWindowPos with physical pixels; SWP_NOACTIVATE so focus management
     // stays in `show_popup`.

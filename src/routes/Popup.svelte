@@ -642,11 +642,13 @@
         title="Settings"
         onclick={() => void showSettingsWindow()}
       >
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm5.9 3c0-.24-.02-.47-.06-.7l1.4-1.1-.9-1.6-1.66.66a5.9 5.9 0 0 0-1.2-.7L11.3 3H9.5l-.28 1.66a5.9 5.9 0 0 0-1.2.7l-1.66-.66-.9 1.6 1.4 1.1c-.04.23-.06.47-.06.7 0 .24.02.47.06.7l-1.4 1.1.9 1.6 1.66-.66c.36.29.76.53 1.2.7l.28 1.66h1.8l.28-1.66c.44-.17.84-.41 1.2-.7l1.66.66.9-1.6-1.4-1.1c.04-.23.06-.46.06-.7Z"
-          />
+        <!-- Stroked, not filled: at this size a solid gear turns to mush,
+             while strokes with round joins stay crisp. -->
+        <svg viewBox="0 0 24 24" width="35" height="35" aria-hidden="true"
+             fill="none" stroke="currentColor" stroke-width="1.6"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3.1" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
       </button>
       <ZoomDial value={zoom} onchange={onZoomChange} />
@@ -720,20 +722,24 @@
     gap: 8px;
   }
 
+  /* 2.5x the old 14px glyph. The hit area grows with it — a control this
+     small was as hard to press as it was to recognise. */
   .icon-btn {
     display: grid;
     place-items: center;
-    padding: 6px;
+    padding: 7px;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--r-md, 10px);
     background: transparent;
-    color: var(--text-2, #9aa3b2);
+    color: var(--text-2);
     cursor: pointer;
+    transition: color var(--dur-fast) var(--ease-out),
+      background var(--dur-fast) var(--ease-out);
   }
 
   .icon-btn:hover {
-    color: var(--text-1, #e8eaf0);
-    background: var(--hover, rgba(255, 255, 255, 0.06));
+    color: var(--text-1);
+    background: var(--overlay-1);
   }
 
   .banner {
