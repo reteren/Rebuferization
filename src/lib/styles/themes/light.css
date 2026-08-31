@@ -1,4 +1,71 @@
 /* Theme: light — see docs/THEMES.md for the contract.
-   One block, colour tokens only. Structural tokens stay shared. */
+   One block, colour tokens only. Structural tokens stay shared.
+   Colour values computed for contrast — see the report for the measured ratios. */
 :root[data-theme="light"] {
+  color-scheme: light;
+
+  /* ---- surfaces: soft cool off-white ground, white cards ------------- */
+  --bg-0: #f3f4f8;                          /* deepest backdrop — light, not grey */
+  --bg-1: rgba(243, 244, 248, 0.8);         /* window wash */
+  --surface-1: #ffffff;                     /* cards: white, lifted off the ground */
+  --surface-2: #e9ebf0;                     /* raised controls / inputs */
+  --surface-3: #ffffff;                     /* popovers: opaque so menus cover the grid */
+  --surface-4: #e0e3ea;                     /* hovered controls */
+  --swatch-empty: #dfe2e8;                  /* color-preview fallback swatch */
+  --window-wash:
+    radial-gradient(130% 90% at 8% -12%, rgba(53, 99, 232, 0.07), transparent 55%),
+    radial-gradient(110% 80% at 96% 112%, rgba(23, 138, 94, 0.05), transparent 55%),
+    radial-gradient(70% 60% at 55% 45%, rgba(124, 74, 209, 0.04), transparent 60%);
+
+  /* --bg is the window backdrop Popup.svelte / Settings.svelte reference as
+     `var(--bg, …)`. Not in the token list, but without it the two windows keep
+     the dark fallback and a light theme is a dark-window light theme. */
+
+  /* ---- overlays ------------------------------------------------------- */
+  --overlay-1: rgba(15, 23, 42, 0.05);      /* hover veil / count pills: a dark wash on light */
+  /* scrim-1 stays dark: it sits over the play button and colour chip, whose
+     glyphs are white (--text-bright), and the image can be any colour. */
+  --scrim-1: rgba(15, 18, 24, 0.58);
+  /* scrim-2 is the badge wash; in this theme the badges' text is dark
+     (--text-2), so the chip flips to a translucent white and stays readable
+     over any image instead of dark-on-dark. */
+  --scrim-2: rgba(255, 255, 255, 0.78);
+
+  /* ---- borders: hairlines, not smudges -------------------------------- */
+  --border-1: rgba(15, 23, 42, 0.10);
+  --border-2: rgba(15, 23, 42, 0.16);
+  --border-3: rgba(15, 23, 42, 0.26);
+  --window-border: rgba(15, 23, 42, 0.12);
+  --border-media-1: rgba(255, 255, 255, 0.28);  /* color chip hairline over the dark scrim */
+  --border-media-2: rgba(255, 255, 255, 0.34);  /* play button ring over the dark scrim */
+
+  /* ---- text: dark on light -------------------------------------------- */
+  --text-1: #171a21;                        /* 15.8:1 on --bg-0 */
+  --text-2: rgba(23, 26, 33, 0.72);         /* composited #55575d, 6.6:1 on --bg-0 */
+  --text-3: rgba(23, 26, 33, 0.5);          /* tertiary: placeholders, chevrons */
+  --text-bright: #ffffff;                   /* white glyphs over media and chips */
+
+  /* ---- accent: vivid blue, the app's family, deep enough for white text ---- */
+  --accent: #3563e8;
+  --on-accent: #ffffff;                     /* 5.1:1 on the accent (Add button, live badge) */
+
+  /* ---- ext hues: seven file-type labels, distinct from each other and
+     from the blue accent that marks the live item ------------------------ */
+  --ext-1: #178a5e;                         /* green */
+  --ext-2: #0c8d9e;                         /* teal */
+  --ext-3: #7c4ad1;                         /* purple */
+  --ext-4: #c16e00;                         /* amber */
+  --ext-5: #d81b60;                         /* rose */
+  --ext-6: #57910a;                         /* lime */
+  --ext-7: #a88400;                         /* yellow */
+
+  /* ---- status ---------------------------------------------------------- */
+  --danger: #d93a4b;
+  --ok: #1d9e63;
+  --warn: #d97706;
+
+  /* ---- shadows: softer and much less opaque than the dark theme's ------- */
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.10);
+  --shadow-2: 0 10px 30px rgba(15, 23, 42, 0.14);
+  --shadow-3: 0 18px 60px rgba(15, 23, 42, 0.18);
 }

@@ -1,4 +1,69 @@
 /* Theme: grey — see docs/THEMES.md for the contract.
-   One block, colour tokens only. Structural tokens stay shared. */
+   Deliberately desaturated neutral grey ground: no blue or warm cast in any
+   surface, so the accent is the only saturated thing on screen. */
 :root[data-theme="grey"] {
+  color-scheme: dark;
+
+  /* ---- surfaces ------------------------------------------------------ */
+  --bg-0: #1b1b1b;                          /* pure neutral grey, deepest backdrop */
+  --bg-1: rgba(24, 24, 24, 0.72);
+  --surface-1: rgba(32, 32, 32, 0.80);      /* cards */
+  --surface-2: rgba(38, 38, 38, 0.84);      /* raised controls */
+  --surface-3: rgba(46, 46, 46, 0.92);      /* popovers */
+  --surface-4: rgba(55, 55, 55, 0.95);      /* hovered controls */
+  --swatch-empty: #474747;
+  --window-wash:
+    radial-gradient(130% 90% at 8% -12%, rgba(255, 255, 255, 0.05), transparent 55%),
+    radial-gradient(110% 80% at 96% 112%, rgba(255, 255, 255, 0.03), transparent 55%),
+    radial-gradient(70% 60% at 55% 45%, rgba(255, 255, 255, 0.02), transparent 60%);
+
+  /* ---- overlays ------------------------------------------------------ */
+  --overlay-1: rgba(255, 255, 255, 0.06);   /* faint white wash: hover veil, chip fills */
+  /* Neutral near-black scrims, kept independent of the theme: they sit over the
+     user's own images and must stay dark enough for white glyphs. */
+  --scrim-1: rgba(9, 9, 9, 0.58);
+  --scrim-2: rgba(12, 12, 12, 0.58);
+
+  /* ---- borders ------------------------------------------------------- */
+  --border-1: rgba(255, 255, 255, 0.07);
+  --border-2: rgba(255, 255, 255, 0.14);
+  --border-3: rgba(255, 255, 255, 0.22);
+  --window-border: rgba(255, 255, 255, 0.09);
+  --border-media-1: rgba(255, 255, 255, 0.14);
+  --border-media-2: rgba(255, 255, 255, 0.18);
+
+  /* ---- text ---------------------------------------------------------- */
+  /* #ECECEC on #1B1B1B is 14.6:1; text-2 at 64% lands on 6.7:1. */
+  --text-1: #ececec;
+  --text-2: rgba(236, 236, 236, 0.64);
+  --text-3: rgba(236, 236, 236, 0.38);
+  --text-bright: #ffffff;
+
+  /* ---- accent -------------------------------------------------------- */
+  /* Sea-teal, the only saturated colour in the theme. Cool-leaning so it never
+     reads warm against the neutral grey, and off the blue family of the ext
+     hues. On it, a near-black picks up the teal ground (9.1:1). */
+  --accent: #2ed9b0;
+  --on-accent: #06241d;
+
+  /* ---- ext palette --------------------------------------------------- */
+  /* Seven hues spread around the wheel and clear of the teal accent, which
+     marks the live clipboard item. */
+  --ext-1: #6a8cff;   /* blue */
+  --ext-2: #63d16f;   /* green */
+  --ext-3: #b48bff;   /* violet */
+  --ext-4: #e2b05a;   /* amber */
+  --ext-5: #ff7b95;   /* rose */
+  --ext-6: #3fc6e8;   /* sky */
+  --ext-7: #a6d94d;   /* lime */
+
+  /* ---- status -------------------------------------------------------- */
+  --danger: #ff7b95;
+  --ok: #63d16f;
+  --warn: #e2b05a;
+
+  /* ---- shadows ------------------------------------------------------- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-2: 0 10px 30px rgba(0, 0, 0, 0.50);
+  --shadow-3: 0 18px 60px rgba(0, 0, 0, 0.60);
 }

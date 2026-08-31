@@ -1,4 +1,73 @@
 /* Theme: dark-green — see docs/THEMES.md for the contract.
-   One block, colour tokens only. Structural tokens stay shared. */
+   Deep, slightly desaturated greens for the surfaces, like a terminal with
+   taste: a muted green-black ground, one bright emerald accent, and a mint
+   success colour that stays separable from both. */
 :root[data-theme="dark-green"] {
+  color-scheme: dark;
+
+  /* ---- surfaces ------------------------------------------------------ */
+  --bg-0: #0b130e;                          /* deepest green-black backdrop */
+  --bg-1: rgba(14, 25, 18, 0.72);           /* window wash */
+  --surface-1: rgba(23, 39, 29, 0.78);      /* cards */
+  --surface-2: rgba(29, 47, 36, 0.82);      /* raised controls */
+  --surface-3: rgba(37, 57, 44, 0.92);      /* popovers */
+  --surface-4: rgba(46, 68, 53, 0.95);      /* hovered controls */
+  --swatch-empty: #27402f;                  /* color-preview fallback */
+  /* Two green glows on near-black: faint enough to stay a wash, not a tint. */
+  --window-wash:
+    radial-gradient(120% 100% at 50% 0%, rgba(110, 231, 135, 0.09), transparent 70%),
+    radial-gradient(100% 80% at 96% 112%, rgba(64, 205, 191, 0.05), transparent 55%);
+
+  /* ---- overlays ------------------------------------------------------ */
+  /* Green-tinted wash so chips/hover veils pick up the hue, not the grey. */
+  --overlay-1: rgba(224, 255, 232, 0.06);
+  /* Scrims sit over the user's own images, so they stay near-neutral dark
+     green-black — dark enough to carry white glyphs whatever is underneath. */
+  --scrim-1: rgba(3, 10, 6, 0.55);
+  --scrim-2: rgba(5, 12, 8, 0.55);
+
+  /* ---- borders ------------------------------------------------------- */
+  --border-1: rgba(214, 255, 224, 0.08);
+  --border-2: rgba(214, 255, 224, 0.15);
+  --border-3: rgba(214, 255, 224, 0.24);
+  --window-border: rgba(214, 255, 224, 0.10);
+  /* Media borders sit over photos, so they stay neutral white, not tinted. */
+  --border-media-1: rgba(255, 255, 255, 0.14);
+  --border-media-2: rgba(255, 255, 255, 0.18);
+
+  /* ---- text ---------------------------------------------------------- */
+  /* #E8F5EA on #0B130E is 16.8:1; text-2 at 64% lands near 7.3:1. */
+  --text-1: #e8f5ea;
+  --text-2: rgba(232, 245, 234, 0.64);
+  --text-3: rgba(232, 245, 234, 0.40);
+  --text-bright: #ffffff;
+
+  /* ---- accent -------------------------------------------------------- */
+  /* Bright emerald: still reads as green, but light enough to clear the deep
+     muted surfaces that mark the item currently on the clipboard. */
+  --accent: #6ee787;
+  /* Dark green-black for text ON the accent — 10.9:1 on #6EE787. */
+  --on-accent: #06210f;
+
+  /* ---- ext palette --------------------------------------------------- */
+  --ext-1: #7aa2ff;
+  --ext-2: #40cdbf;  /* pushed cyan so teal file chips clear the emerald accent */
+  --ext-3: #bb9af7;
+  --ext-4: #e0af68;
+  --ext-5: #f7768e;
+  --ext-6: #2ac3de;
+  --ext-7: #b8dc5e;  /* shifted lime so the green hue clears the accent */
+
+  /* ---- status -------------------------------------------------------- */
+  --danger: #f7768e;
+  /* Mint, brightened hard: a mid-green "ok" would sink into these surfaces,
+     and it must also stay off the emerald accent. #46FF9C on #0B130E is 14.4:1. */
+  --ok: #46ff9c;
+  --warn: #e0af68;
+
+  /* ---- shadows ------------------------------------------------------- */
+  /* Tinted green-black: neutral black over green reads as a grey halo. */
+  --shadow-1: 0 1px 2px rgba(2, 8, 4, 0.45);
+  --shadow-2: 0 10px 30px rgba(2, 8, 4, 0.55);
+  --shadow-3: 0 18px 60px rgba(2, 8, 4, 0.65);
 }

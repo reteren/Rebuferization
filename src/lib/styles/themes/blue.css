@@ -1,4 +1,62 @@
-/* Theme: blue — see docs/THEMES.md for the contract.
-   One block, colour tokens only. Structural tokens stay shared. */
+/* Theme: blue — light, cool and airy with a clear blue cast.
+   One block, colour tokens only. Structural tokens stay shared.
+   Surfaces are pale steel-white so the vivid --accent stays the only
+   saturated blue; that is what marks the live clipboard item. */
 :root[data-theme="blue"] {
+  color-scheme: light;
+
+  /* ---- surfaces ------------------------------------------------------ */
+  --bg-0: #e3eaf8;                       /* deepest backdrop — pale steel blue */
+  --bg-1: rgba(214, 226, 247, 0.72);     /* window wash base */
+  --surface-1: rgba(249, 251, 255, 0.86);/* cards — near white, cool tint */
+  --surface-2: rgba(255, 255, 255, 0.92);/* raised controls */
+  --surface-3: rgba(255, 255, 255, 0.98);/* popovers */
+  --surface-4: #ffffff;                  /* hovered controls */
+  --swatch-empty: #c2cfe4;               /* color-preview fallback when value is missing */
+  --window-wash:
+    radial-gradient(130% 90% at 8% -12%, rgba(120, 160, 235, 0.16), transparent 55%),
+    radial-gradient(110% 80% at 96% 112%, rgba(90, 180, 215, 0.12), transparent 55%),
+    radial-gradient(70% 60% at 55% 45%, rgba(140, 150, 240, 0.09), transparent 60%);
+
+  /* ---- overlays ------------------------------------------------------ */
+  --overlay-1: rgba(35, 70, 150, 0.10);  /* faint blue veil: hover, chip fills */
+  --scrim-1: rgba(18, 28, 50, 0.60);     /* dark blue scrim: play button, color chip */
+  --scrim-2: rgba(14, 24, 44, 0.56);     /* dark blue scrim: badges over previews */
+
+  /* ---- borders ------------------------------------------------------- */
+  --border-1: rgba(72, 105, 168, 0.18);
+  --border-2: rgba(72, 105, 168, 0.30);
+  --border-3: rgba(72, 105, 168, 0.42);
+  --window-border: rgba(255, 255, 255, 0.60);  /* 1px inner glass border */
+  --border-media-1: rgba(255, 255, 255, 0.50); /* color chip hairline over scrim */
+  --border-media-2: rgba(255, 255, 255, 0.60); /* play button ring over scrim */
+
+  /* ---- text ---------------------------------------------------------- */
+  --text-1: #182a4c;                     /* dark navy — primary read */
+  --text-2: rgba(24, 42, 76, 0.80);      /* secondary read */
+  --text-3: rgba(24, 42, 76, 0.52);      /* faint labels, placeholders */
+  --text-bright: #ffffff;                /* white glyphs over media and chips */
+
+  /* ---- accent (overridden at runtime from settings) ------------------ */
+  --accent: #7aa2ff;
+  --on-accent: #0a1730;                  /* near-black navy on the accent */
+
+  /* ---- ext palette (file-extension accent hues, kept off --accent) --- */
+  --ext-1: #d13b56;                      /* rose — images */
+  --ext-2: #d96a1a;                      /* orange — docs */
+  --ext-3: #a97e20;                      /* ochre — archives */
+  --ext-4: #2f8f52;                      /* green — code */
+  --ext-5: #168f9e;                      /* teal — media */
+  --ext-6: #6f4fd1;                      /* violet — config */
+  --ext-7: #ad3580;                      /* magenta — misc */
+
+  /* ---- status -------------------------------------------------------- */
+  --danger: #c42f4c;
+  --ok: #1e8f6a;
+  --warn: #b0781f;
+
+  /* ---- shadows (soft on light) --------------------------------------- */
+  --shadow-1: 0 1px 2px rgba(50, 80, 140, 0.18);
+  --shadow-2: 0 10px 30px rgba(50, 80, 140, 0.20);
+  --shadow-3: 0 18px 60px rgba(45, 75, 130, 0.22);
 }

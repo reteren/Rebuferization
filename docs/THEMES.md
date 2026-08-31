@@ -12,7 +12,7 @@ the fallback. A theme file overrides ONLY the colour tokens, inside a single
 spacing, blur or the chevron mask: those are structural and shared, and a theme
 that changes them stops being a theme.
 
-**Every theme must define all 35 of these.** Leaving one out silently inherits
+**Every theme must define all 36 of these.** Leaving one out silently inherits
 the dark value, which is how a light theme ends up with white text on white.
 
 ```
@@ -30,6 +30,13 @@ shadows    --shadow-1 --shadow-2 --shadow-3
 
 `--accent-soft`, `--accent-strong` and `--danger-soft` are derived with
 `color-mix` from the two above them and must NOT be redefined.
+
+Neither should `--bg`, `--panel`, `--input-bg` and `--hover`: the two window
+shells reference those, and `tokens.css` derives them from the surfaces above,
+so every theme gets them for free. They were previously referenced with hard
+dark literals as fallbacks and defined nowhere, which meant no theme could
+reach the window background, the panels or the inputs — a light theme stayed
+dark in exactly the places that mattered.
 
 ## Rules that make a theme usable rather than merely coloured
 

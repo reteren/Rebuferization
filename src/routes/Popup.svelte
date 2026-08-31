@@ -685,7 +685,7 @@
     height: 100vh;
     display: flex;
     flex-direction: column;
-    background: var(--bg, rgba(18, 20, 24, 0.92));
+    background: var(--bg);
     color: var(--text-1, #e8eaf0);
     font-family: var(--font-ui, 'Segoe UI', system-ui, sans-serif);
     font-size: 13px;
@@ -796,7 +796,7 @@
     min-width: 320px;
     padding: 16px;
     border-radius: 14px;
-    background: var(--panel, #1c1f26);
+    background: var(--panel);
     border: 1px solid var(--border-1, rgba(255, 255, 255, 0.1));
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   }
@@ -805,7 +805,7 @@
     border: 1px solid var(--border-1, rgba(255, 255, 255, 0.12));
     border-radius: 8px;
     padding: 8px 10px;
-    background: var(--input-bg, rgba(255, 255, 255, 0.05));
+    background: var(--input-bg);
     color: var(--text-1, #e8eaf0);
     font: inherit;
     outline: none;

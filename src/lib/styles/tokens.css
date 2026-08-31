@@ -14,6 +14,16 @@
   --surface-4: rgba(46, 51, 66, 0.95);      /* hovered controls */
   --swatch-empty: #3a3f4b;                  /* color-preview fallback when value is missing */
 
+  /* ---- aliases used by the two window shells ------------------------- */
+  /* These were referenced with hard dark literals as fallbacks and defined
+     nowhere, so no theme could reach the window background, the panels or the
+     inputs — a light theme stayed dark exactly where it mattered most. Derived
+     from each theme's own surfaces, so no theme file has to define them. */
+  --bg: var(--bg-1);
+  --panel: var(--surface-1);
+  --input-bg: var(--surface-2);
+  --hover: var(--overlay-1);
+
   /* ---- overlays ------------------------------------------------------ */
   --overlay-1: rgba(255, 255, 255, 0.06);   /* faint white wash: card hover veil, chip fills */
   --scrim-1: rgba(8, 10, 15, 0.55);         /* dark scrim: play button, color chip */

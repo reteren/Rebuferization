@@ -1000,7 +1000,7 @@ function resetEverything(): void {
   .settings {
     height: 100vh;
     display: flex;
-    background: var(--bg, rgba(18, 20, 24, 0.94));
+    background: var(--bg);
     color: var(--text-1, #e8eaf0);
     font-family: var(--font-ui, 'Segoe UI', system-ui, sans-serif);
     font-size: 13px;
@@ -1029,12 +1029,12 @@ function resetEverything(): void {
 
   nav button:hover {
     color: var(--text-1, #e8eaf0);
-    background: var(--hover, rgba(255, 255, 255, 0.05));
+    background: var(--hover);
   }
 
   nav button.active {
     color: var(--text-1, #e8eaf0);
-    background: var(--hover, rgba(255, 255, 255, 0.08));
+    background: var(--hover);
   }
 
   .content {
@@ -1090,7 +1090,7 @@ function resetEverything(): void {
   input[type='number'],
   input[type='text'],
   select {
-    background: var(--input-bg, rgba(255, 255, 255, 0.05));
+    background: var(--input-bg);
     border: 1px solid var(--border-1, rgba(255, 255, 255, 0.12));
     border-radius: 8px;
     color: var(--text-1, #e8eaf0);
@@ -1117,7 +1117,7 @@ function resetEverything(): void {
   }
 
   button:hover {
-    background: var(--hover, rgba(255, 255, 255, 0.06));
+    background: var(--hover);
   }
 
   button.danger {
@@ -1192,7 +1192,7 @@ function resetEverything(): void {
     padding: 12px;
     border: 1px solid var(--border-1, rgba(255, 255, 255, 0.08));
     border-radius: 12px;
-    background: var(--panel, rgba(255, 255, 255, 0.02));
+    background: var(--panel);
     max-width: 640px;
   }
 
@@ -1209,7 +1209,7 @@ function resetEverything(): void {
     height: 14px;
     border-radius: 7px;
     overflow: hidden;
-    background: var(--input-bg, rgba(255, 255, 255, 0.05));
+    background: var(--input-bg);
   }
 
   .meter-seg {
@@ -1256,7 +1256,7 @@ function resetEverything(): void {
     gap: 8px;
     padding: 6px 10px;
     border-radius: 8px;
-    background: var(--input-bg, rgba(255, 255, 255, 0.04));
+    background: var(--input-bg);
   }
 
   .blocked-list code {
@@ -1285,7 +1285,7 @@ function resetEverything(): void {
     flex-direction: column;
     gap: 6px;
     padding: 10px 16px;
-    background: var(--panel, #1c1f26);
+    background: var(--panel);
     border-bottom: 1px solid var(--border-1, rgba(255, 255, 255, 0.1));
     font-size: 12px;
     color: var(--text-2, #9aa3b2);
@@ -1295,7 +1295,7 @@ function resetEverything(): void {
     height: 6px;
     border-radius: 3px;
     overflow: hidden;
-    background: var(--input-bg, rgba(255, 255, 255, 0.08));
+    background: var(--input-bg);
   }
 
   .progress-fill {
