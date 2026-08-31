@@ -1,3 +1,15 @@
+/* Theme files first: CSS ignores @import unless it precedes every other rule,
+   which is why putting these at the bottom silently dropped all six themes
+   from the build. Order does not decide the winner here — :root[data-theme]
+   outranks a bare :root on specificity, so the overrides apply wherever the
+   imports sit. */
+@import './themes/black.css';
+@import './themes/light.css';
+@import './themes/grey.css';
+@import './themes/blue.css';
+@import './themes/dark-green.css';
+@import './themes/dark-purple.css';
+
 /* OWNER: worker W5 — dark liquid glass design tokens.
    Every component reads tokens; nothing hardcodes a color, radius or duration.
    --accent is overridden at runtime from settings — reference it everywhere. */
@@ -109,13 +121,3 @@
     radial-gradient(110% 80% at 96% 112%, rgba(78, 201, 176, 0.06), transparent 55%),
     radial-gradient(70% 60% at 55% 45%, rgba(187, 154, 247, 0.04), transparent 60%);
 }
-
-/* ---- themes -----------------------------------------------------------
-   Each overrides the colour tokens above inside its own
-   :root[data-theme="..."] block. Imported last so they win. */
-@import './themes/black.css';
-@import './themes/light.css';
-@import './themes/grey.css';
-@import './themes/blue.css';
-@import './themes/dark-green.css';
-@import './themes/dark-purple.css';
