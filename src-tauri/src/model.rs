@@ -116,6 +116,8 @@ pub struct Filter {
     pub pinned_only: bool,
     /// The Links tab, which is a sub_kind rather than a kind.
     pub sub_kind: Option<SubKind>,
+    /// The Added Files tab: shelf items, stored by path and never copied.
+    pub references_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +189,8 @@ pub struct TabCounts {
     pub links: i64,
     pub files: i64,
     pub pinned: i64,
+    /// Shelf items — added through + Add rather than captured.
+    pub references: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

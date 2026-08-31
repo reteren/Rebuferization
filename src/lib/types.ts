@@ -35,6 +35,8 @@ export interface Filter {
   ext: string | null
   pinnedOnly: boolean
   subKind: SubKind | null
+  /// The Added Files tab: shelf items, stored by path and never copied.
+  referencesOnly: boolean
 }
 
 export const EMPTY_FILTER: Filter = {
@@ -42,11 +44,12 @@ export const EMPTY_FILTER: Filter = {
   ext: null,
   pinnedOnly: false,
   subKind: null,
+  referencesOnly: false,
 }
 
 export type Sort = 'newest' | 'oldest' | 'nameAsc' | 'nameDesc' | 'sizeAsc' | 'sizeDesc'
 
-export type TabId = 'all' | 'images' | 'text' | 'links' | 'files' | 'pinned'
+export type TabId = 'all' | 'images' | 'text' | 'links' | 'files' | 'references' | 'pinned'
 
 /// Each tab is just a preset filter; the grid never special-cases a tab.
 export const TAB_FILTERS: Record<TabId, Filter> = {
@@ -55,6 +58,7 @@ export const TAB_FILTERS: Record<TabId, Filter> = {
   text: { ...EMPTY_FILTER, kind: 'text' },
   links: { ...EMPTY_FILTER, subKind: 'link' },
   files: { ...EMPTY_FILTER, kind: 'file' },
+  references: { ...EMPTY_FILTER, referencesOnly: true },
   pinned: { ...EMPTY_FILTER, pinnedOnly: true },
 }
 
@@ -72,6 +76,7 @@ export interface TabCounts {
   text: number
   links: number
   files: number
+  references: number
   pinned: number
 }
 

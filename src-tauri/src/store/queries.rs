@@ -216,6 +216,9 @@ pub fn list_items(
     if filter.pinned_only {
         conditions.push("pinned = 1");
     }
+    if filter.references_only {
+        conditions.push("is_reference = 1");
+    }
     if let Some(sub_kind) = filter.sub_kind {
         conditions.push("sub_kind = ?");
         params.push(Box::new(sub_kind.as_str().to_string()));
@@ -282,6 +285,9 @@ pub fn search_items(
     if filter.pinned_only {
         conditions.push("i.pinned = 1");
     }
+    if filter.references_only {
+        conditions.push("i.is_reference = 1");
+    }
     if let Some(sub_kind) = filter.sub_kind {
         conditions.push("i.sub_kind = ?");
         params.push(Box::new(sub_kind.as_str().to_string()));
@@ -341,6 +347,9 @@ fn search_with_like(
     }
     if filter.pinned_only {
         conditions.push("pinned = 1".into());
+    }
+    if filter.references_only {
+        conditions.push("is_reference = 1".into());
     }
     if let Some(sub_kind) = filter.sub_kind {
         conditions.push("sub_kind = ?".into());
@@ -665,6 +674,9 @@ pub fn get_ext_facets(conn: &Connection, filter: &Filter) -> AppResult<Vec<Facet
     if filter.pinned_only {
         conditions.push("pinned = 1".into());
     }
+    if filter.references_only {
+        conditions.push("is_reference = 1".into());
+    }
     if let Some(sub_kind) = filter.sub_kind {
         conditions.push("sub_kind = ?".into());
         params.push(Box::new(sub_kind.as_str().to_string()));
@@ -752,6 +764,7 @@ pub fn get_tab_counts(conn: &Connection) -> AppResult<TabCounts> {
             COUNT(CASE WHEN kind = 'text' THEN 1 END),
             COUNT(CASE WHEN sub_kind = 'link' THEN 1 END),
             COUNT(CASE WHEN kind = 'file' THEN 1 END),
+            COUNT(CASE WHEN is_reference = 1 THEN 1 END),
             COUNT(CASE WHEN pinned = 1 THEN 1 END)
         FROM items;
     ";
@@ -762,7 +775,8 @@ pub fn get_tab_counts(conn: &Connection) -> AppResult<TabCounts> {
             text: r.get(2)?,
             links: r.get(3)?,
             files: r.get(4)?,
-            pinned: r.get(5)?,
+            references: r.get(5)?,
+            pinned: r.get(6)?,
         })
     })?;
     Ok(counts)

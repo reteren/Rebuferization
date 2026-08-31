@@ -55,10 +55,22 @@
     other: 'BIN',
   }
 
-  const formatLabel = $derived(
-    item.ext ??
-      (item.subKind === 'link' ? 'URL' : item.subKind === 'color' ? 'HEX' : KIND_FALLBACK[item.kind]),
-  )
+  // The label follows the item's KIND, not its file extension: a link card is
+  // LINK no matter what ext it would save as, a colour swatch is COLOR (the hex
+  // already sits in the chip), and code is CODE. `ext` itself is untouched so
+  // Save-as still produces the right filename.
+  const formatLabel = $derived.by(() => {
+    switch (item.subKind) {
+      case 'link':
+        return 'LINK'
+      case 'color':
+        return 'COLOR'
+      case 'code':
+        return 'CODE'
+      default:
+        return item.ext ?? KIND_FALLBACK[item.kind]
+    }
+  })
 
   const ageLabel = $derived.by(() => {
     const ms = Math.max(0, Date.now() - item.createdAt)

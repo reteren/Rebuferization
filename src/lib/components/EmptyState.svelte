@@ -9,6 +9,7 @@
     text: { title: 'No text yet', hint: 'Text you copy appears here, searchable in an instant.' },
     links: { title: 'No links yet', hint: 'Copied URLs collect in this tab.' },
     files: { title: 'No files yet', hint: 'Files copied from Explorer appear here.' },
+    references: { title: 'Nothing added yet', hint: 'Use + Add to keep a file here by reference - it is never copied and never expires.' },
     pinned: { title: 'Nothing pinned', hint: 'Pin an item to keep it safe from cleanup.' },
   }
 
@@ -18,6 +19,7 @@
     text: '<path d="M5 6.5h14M5 10.5h14M5 14.5h9M5 18h6"/>',
     links: '<path d="M10 13.5a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 10.5a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
     files: '<path d="M13 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V9z"/><path d="M13 3.5v5.5h5.5"/>',
+    references: '<path d="M13 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V9z"/><path d="M13 3.5v5.5h5.5"/><path d="M12 12v5M9.5 14.5h5"/>',
     pinned: '<path d="M12 3a5 5 0 0 0-5 5c0 4.2 5 9.5 5 9.5s5-5.3 5-9.5a5 5 0 0 0-5-5Z"/><circle cx="12" cy="8" r="1.7"/><path d="M12 17.5V21"/>',
   }
 

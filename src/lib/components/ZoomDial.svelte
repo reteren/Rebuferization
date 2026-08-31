@@ -89,13 +89,13 @@
   onpointercancel={endDrag}
   onwheel={onWheel}
 >
-  <span class="hint">+</span>
   <div class="track">
     {#each Array.from({ length: MAX }, (_, i) => i + 1) as step}
-      <span class="dot" class:active={step <= level}></span>
+      <!-- The fill rises from the bottom like a level meter: a bigger zoom
+           lights the lower dots first, so increasing zoom fills upward. -->
+      <span class="dot" class:active={step > MAX - level}></span>
     {/each}
   </div>
-  <span class="hint">-</span>
 </div>
 
 <style>
@@ -142,11 +142,5 @@
 
   .dot.active {
     opacity: 1;
-  }
-
-  .hint {
-    color: var(--text-3);
-    font-size: 8px;
-    line-height: 1;
   }
 </style>

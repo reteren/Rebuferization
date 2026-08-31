@@ -316,7 +316,17 @@
     font-weight: 600;
     letter-spacing: 0.05em;
     color: var(--text-2);
-    background: color-mix(in srgb, var(--bg-0) 62%, transparent);
+    /* A frosted band, not a slab: the surface colour fades in from the edges
+       and out again, so cards sliding underneath stay separated (the blur does
+       the real work) without a hard-edged black rectangle. */
+    background: linear-gradient(
+      to bottom,
+      transparent 0%,
+      color-mix(in srgb, var(--bg-0) 55%, transparent) 30%,
+      color-mix(in srgb, var(--bg-0) 72%, transparent) 55%,
+      color-mix(in srgb, var(--bg-0) 55%, transparent) 80%,
+      transparent 100%
+    );
     backdrop-filter: blur(var(--glass-blur));
     user-select: none;
     -webkit-user-select: none;
@@ -325,5 +335,16 @@
   .group-header.pinned {
     z-index: 7;
     will-change: transform;
+    /* The pinned header floats over scrolling cards for as long as the group
+       is active; give it a firmer centre so the label never washes out, still
+       without hard edges. */
+    background: linear-gradient(
+      to bottom,
+      transparent 0%,
+      color-mix(in srgb, var(--bg-0) 65%, transparent) 28%,
+      color-mix(in srgb, var(--bg-0) 85%, transparent) 55%,
+      color-mix(in srgb, var(--bg-0) 65%, transparent) 78%,
+      transparent 100%
+    );
   }
 </style>

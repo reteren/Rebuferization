@@ -89,7 +89,15 @@
     return Math.max(1, Math.floor(inner / (tileW + GRID_GAP)))
   })
   const tabCounts = $derived<Record<TabId, number>>(
-    items.counts ?? { all: 0, images: 0, text: 0, links: 0, files: 0, pinned: 0 },
+    items.counts ?? {
+      all: 0,
+      images: 0,
+      text: 0,
+      links: 0,
+      files: 0,
+      references: 0,
+      pinned: 0,
+    },
   )
 
   $effect(() => {
@@ -163,6 +171,9 @@
     // harmless.
     const onScrollCapture = (e: Event): void => {
       const scroller = e.target as HTMLElement | null
+      // The menu must not float over a different set of cards than the one it
+      // was opened for; any grid scroll dismisses it.
+      if (contextMenu) contextMenu = null
       if (!scroller) return
       const overflow = scroller.scrollHeight - scroller.clientHeight
       if (overflow < 100) return
@@ -243,6 +254,44 @@
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  })
+
+  // While the context menu is open, dismiss it on any interaction that is not
+  // with the menu itself: a left or right click anywhere outside, the popup
+  // losing focus, being hidden or minimised, or the document going invisible.
+  // Esc is handled by the keydown listener above. The menu element carries
+  // class="menu", so clicks on its own items pass through to their action.
+  $effect(() => {
+    if (!contextMenu) return
+    const insideMenu = (t: EventTarget | null): boolean =>
+      t instanceof HTMLElement && t.closest('.menu') !== null
+    const close = (): void => {
+      contextMenu = null
+    }
+    const onPointerDown = (e: PointerEvent): void => {
+      if (!insideMenu(e.target)) close()
+    }
+    const onContextMenu = (e: MouseEvent): void => {
+      // Never let the native menu appear over ours, and close on a right-click
+      // outside the menu (a right-click on another card re-opens it there via
+      // the card's own handler, which is the usual desktop behaviour).
+      e.preventDefault()
+      if (!insideMenu(e.target)) close()
+    }
+    const onBlur = (): void => close()
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') close()
+    }
+    window.addEventListener('pointerdown', onPointerDown, true)
+    window.addEventListener('contextmenu', onContextMenu, true)
+    window.addEventListener('blur', onBlur)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true)
+      window.removeEventListener('contextmenu', onContextMenu, true)
+      window.removeEventListener('blur', onBlur)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   })
 
   function refreshStats(): Promise<void> {
