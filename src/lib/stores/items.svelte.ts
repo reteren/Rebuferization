@@ -46,6 +46,9 @@ class ItemsStore {
   private timer: ReturnType<typeof setTimeout> | undefined
   private running = false
   private rerun = false
+  /** Whether a load has ever succeeded. Only the first one is worth retrying
+   * for; after that a failure is a real failure and must surface. */
+  private everLoaded = false
   private loadingMore = false
   private refreshing = false
   private waiters: Array<{ resolve: () => void; reject: (e: unknown) => void }> = []
@@ -119,9 +122,24 @@ class ItemsStore {
     this.loading = true
     const { filter, sort, query } = this
     try {
-      const raw = query
-        ? await searchItems(query, filter, PAGE_SIZE + 1)
-        : await listItems(filter, sort, 0, PAGE_SIZE + 1)
+      // The backend manages its state at the very end of setup, after the
+      // window exists and its scripts have already run, so on a cold start the
+      // first call can arrive before there is anything to answer it. Giving up
+      // quietly there left the popup showing "Nothing here yet" over a full
+      // history, and nothing asked again until the next capture or tab change.
+      let raw: ItemDto[] | undefined
+      for (let attempt = 0; ; attempt++) {
+        try {
+          raw = query
+            ? await searchItems(query, filter, PAGE_SIZE + 1)
+            : await listItems(filter, sort, 0, PAGE_SIZE + 1)
+          break
+        } catch (e) {
+          if (this.everLoaded || attempt >= 40) throw e
+          await new Promise((r) => setTimeout(r, 250))
+        }
+      }
+      this.everLoaded = true
       this.list = raw.slice(0, PAGE_SIZE)
       this.hasMore = raw.length > PAGE_SIZE
       for (const w of this.waiters) w.resolve()
