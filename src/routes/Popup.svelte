@@ -752,7 +752,7 @@
 
   .icon-btn:hover svg,
   .icon-btn:focus-visible svg {
-    transform: rotate(110deg);
+    transform: rotate(-110deg);
   }
 
   /* A spinning icon is exactly what reduced-motion is asking us not to do. */
