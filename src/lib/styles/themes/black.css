@@ -1,12 +1,11 @@
 /* Theme: black — a true OLED-black theme.
-   Contract per docs/THEMES.md: one :root[data-theme="black"],
-[data-theme="black"] block, colour
-   tokens only. --accent-soft / --accent-strong / --danger-soft derive via
+   Contract per docs/THEMES.md: one block of colour tokens only. --accent-soft / --accent-strong / --danger-soft derive via
    color-mix from --accent / --danger and are intentionally NOT redefined.
    --bg-0 is pure #000; every surface lifts off it in small, cool-tinted steps
    so cards separate without any of them reading as grey. */
 
-:root[data-theme="black"] {
+:root[data-theme="black"],
+[data-theme="black"] {
   color-scheme: dark;
 
   /* ---- surfaces: true black, then small deliberate lifts -------------- */

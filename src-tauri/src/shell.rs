@@ -119,6 +119,32 @@ pub fn open(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Opens one stored item with its default handler.
+///
+/// It must go through `resolve_paths`, not the raw blob: a captured blob is
+/// content-addressed, so its file name is a hash with no extension, and
+/// ShellExecute on an extensionless file has nothing to dispatch on — Windows
+/// answers with the "how do you want to open this?" picker every time. The
+/// resolver materializes a temp copy named from the item's title and
+/// extension, and hands references their original path untouched.
+pub fn open_item(store: &Store, id: i64) -> AppResult<()> {
+    let paths = resolve_paths(store, &[id])?;
+    let path = paths
+        .first()
+        .ok_or_else(|| AppError::Other(format!("item {id} resolved to no file")))?;
+    open(path)
+}
+
+/// Same resolution, then the shell's "Open with…" picker — which is where that
+/// picker belongs, rather than appearing for an ordinary open.
+pub fn open_item_with(store: &Store, id: i64) -> AppResult<()> {
+    let paths = resolve_paths(store, &[id])?;
+    let path = paths
+        .first()
+        .ok_or_else(|| AppError::Other(format!("item {id} resolved to no file")))?;
+    open_with(path)
+}
+
 /// Opens the shell's "Open with…" dialog for a file.
 pub fn open_with(path: &Path) -> AppResult<()> {
     let _com = ComScope::init()?;

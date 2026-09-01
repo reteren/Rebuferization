@@ -150,12 +150,12 @@ pub fn save_item_as(state: State<'_, AppState>, id: i64, target: String) -> AppR
 
 #[tauri::command]
 pub fn open_item(state: State<'_, AppState>, id: i64) -> AppResult<()> {
-    crate::shell::open(&state.store.blob_path(id)?)
+    crate::shell::open_item(&state.store, id)
 }
 
 #[tauri::command]
 pub fn open_item_with(state: State<'_, AppState>, id: i64) -> AppResult<()> {
-    crate::shell::open_with(&state.store.blob_path(id)?)
+    crate::shell::open_item_with(&state.store, id)
 }
 
 #[tauri::command]

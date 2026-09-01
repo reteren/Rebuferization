@@ -230,7 +230,9 @@
   </div>
 
   {#if isCurrent}
-    <span class="badge live">right now in buffer</span>
+    <span class="badge live" title="This is what the clipboard holds right now">
+      in buffer
+    </span>
   {/if}
 
   {#if formatLabelSize !== 'off'}
@@ -248,6 +250,9 @@
       0 0 12px -2px var(--accent);
   }
 
+  /* "right now in buffer" did not fit a card at any zoom and was truncated to
+     "right now i" — a clipped label reads as a typo, not as a shortened one.
+     Two words fit, and the full sentence lives in the tooltip. */
   .badge.live {
     position: absolute;
     top: 4px;

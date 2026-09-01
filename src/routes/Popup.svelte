@@ -729,7 +729,9 @@
     border: none;
     border-radius: var(--r-md, 10px);
     background: transparent;
-    color: var(--text-2);
+    /* The accent by default, not only on hover: it is the one control in the
+       footer that is ours rather than the user's content. */
+    color: var(--accent);
     cursor: pointer;
     transition: color var(--dur-fast) var(--ease-out),
       background var(--dur-fast) var(--ease-out);

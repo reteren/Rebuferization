@@ -33,13 +33,11 @@
 
 
   /* ---- accent (overridden at runtime from settings) ------------------ */
-  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
-  --accent-strong: color-mix(in srgb, var(--accent) 90%, #ffffff);
+
 
   /* ---- ext palette (file-extension accent hues, kept off --accent) --- */
 
   /* ---- status -------------------------------------------------------- */
-  --danger-soft: color-mix(in srgb, var(--danger) 16%, transparent);
 
 
   /* ---- radii --------------------------------------------------------- */
@@ -77,4 +75,16 @@
 
   /* ---- glass --------------------------------------------------------- */
   --glass-blur: 18px;
+}
+
+/* Derived from --accent and --danger. Declared for [data-theme] as well as
+   :root because a custom property's var() is resolved on the element that
+   DECLARES it: left on :root alone, a preview tile painted in another theme
+   would inherit the root theme's soft and strong accents while using its own
+   base one. */
+:root,
+[data-theme] {
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-strong: color-mix(in srgb, var(--accent) 90%, #ffffff);
+  --danger-soft: color-mix(in srgb, var(--danger) 16%, transparent);
 }
