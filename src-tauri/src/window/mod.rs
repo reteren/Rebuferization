@@ -11,10 +11,11 @@ use std::sync::{Mutex, OnceLock};
 
 use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, SetForegroundWindow, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCLBUTTONDOWN,
-    WM_NCLBUTTONUP,
+    GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow, WM_ENTERSIZEMOVE,
+    WM_EXITSIZEMOVE, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
 };
 
 use crate::error::{AppError, AppResult};
@@ -289,10 +290,58 @@ pub fn show_settings(app: &AppHandle) -> AppResult<()> {
     Ok(())
 }
 
+/// True when the window that now holds focus belongs to this process.
+///
+/// A native folder picker or save dialog is opened by us and runs in our own
+/// process, so it takes focus while the user is still working inside settings.
+/// Without this check the dismissal would close the settings window the moment
+/// "Choose folder" was pressed, and the dialog would be left orphaned.
+fn foreground_is_ours() -> bool {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        return false;
+    }
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    pid != 0 && pid == unsafe { GetCurrentProcessId() }
+}
+
+/// Wired once, at startup. Two things the settings window got wrong:
+///
+/// Closing it destroyed the webview, and every later "open settings" then
+/// looked up a window that no longer existed and failed — settings could not
+/// be reopened at all until the app was restarted. Hiding instead keeps the
+/// window alive, which is also what makes reopening instant.
+///
+/// And it stayed open behind whatever the user switched to. Losing focus is
+/// the dismissal signal, exactly as it is for the popup, except that our own
+/// file dialogs must not count as losing it.
+static SETTINGS_WIRED: AtomicBool = AtomicBool::new(false);
+
+fn wire_settings_dismissal(window: &WebviewWindow) {
+    if SETTINGS_WIRED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let win = window.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = win.hide();
+        }
+        WindowEvent::Focused(false) if !foreground_is_ours() => {
+            let _ = win.hide();
+        }
+        _ => {}
+    });
+}
+
 /// Applies acrylic on Windows 11, falling back to a flat background on
 /// Windows 10. Called once per window at startup. Also wires the popup's
 /// outside-click dismissal, which needs to happen before it can be shown.
 pub fn apply_backdrop(window: &WebviewWindow) -> AppResult<()> {
+    if window.label() == SETTINGS_LABEL {
+        wire_settings_dismissal(window);
+    }
     if window.label() == POPUP_LABEL {
         wire_popup_subclass(window)?;
         if !DISMISS_WIRED.swap(true, Ordering::SeqCst) {

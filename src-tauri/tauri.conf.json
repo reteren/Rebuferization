@@ -40,7 +40,8 @@
         "transparent": true,
         "shadow": true,
         "resizable": true,
-        "center": true
+        "center": true,
+        "skipTaskbar": true
       },
       {
         "label": "traymenu",

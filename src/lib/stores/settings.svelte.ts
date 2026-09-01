@@ -107,10 +107,22 @@ class SettingsStore {
   }
 
   private async loadOnce(): Promise<void> {
-    try {
-      this.current = await getSettings()
-    } catch {
-      // Backend not reachable (parallel build); defaults stand in.
+    // The backend manages AppState as the very last step of setup, after the
+    // store is opened and the watcher, hotkeys and tray are up; the windows
+    // are created before that and their scripts run immediately. So on a cold
+    // start get_settings can arrive before there is any state to answer it,
+    // and it fails. Settling for the defaults there is what made a chosen
+    // theme revert to dark blue on every restart: nothing ever asked again,
+    // and the settings only reappeared once something emitted a change.
+    // Retry instead — the window is still hidden at this point, so waiting
+    // costs nothing visible.
+    for (let attempt = 0; attempt < 60; attempt++) {
+      try {
+        this.current = await getSettings()
+        break
+      } catch {
+        await new Promise((r) => setTimeout(r, 250))
+      }
     }
     applyAppearance(this.current.appearance)
     this.unlisten?.()
