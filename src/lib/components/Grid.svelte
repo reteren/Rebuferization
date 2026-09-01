@@ -269,7 +269,7 @@
           class:pinned={h.pinned}
           style="top:{h.top}px;{h.pinned ? `transform: translateY(${scrollTop - h.top}px);` : ''}"
         >
-          {h.label}
+          <span class="chip">{h.label}</span>
         </div>
       {/each}
       {#each visibleCards as c (c.id)}
@@ -307,6 +307,8 @@
     width: 100%;
   }
 
+  /* The positioned band carries the layout; it paints nothing itself, so the
+     visible label can be a chip that does not have to fill the row height. */
   .group-header {
     position: absolute;
     left: 0;
@@ -316,39 +318,42 @@
     display: flex;
     align-items: center;
     padding: 0 4px;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none;
+  }
+
+  /* A rounded chip rather than a rectangle: it floats over scrolling cards, so
+     it should read as a label sitting on top of them, not as a slab cut out of
+     the background. The hairline and the blur do the separating. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 11px;
+    border-radius: var(--r-pill);
+    background: color-mix(in srgb, var(--surface-3) 88%, transparent);
+    border: 1px solid var(--border-2);
+    box-shadow: var(--shadow-1);
+    backdrop-filter: blur(var(--glass-blur));
+    color: var(--text-2);
     font-size: var(--fs-xs);
     font-weight: 600;
     letter-spacing: 0.05em;
-    color: var(--text-2);
-    /* A frosted band, not a slab: the surface colour fades in from the edges
-       and out again, so cards sliding underneath stay separated (the blur does
-       the real work) without a hard-edged black rectangle. */
-    background: linear-gradient(
-      to bottom,
-      transparent 0%,
-      color-mix(in srgb, var(--bg-0) 55%, transparent) 30%,
-      color-mix(in srgb, var(--bg-0) 72%, transparent) 55%,
-      color-mix(in srgb, var(--bg-0) 55%, transparent) 80%,
-      transparent 100%
-    );
-    backdrop-filter: blur(var(--glass-blur));
-    user-select: none;
-    -webkit-user-select: none;
+    line-height: 1;
+    white-space: nowrap;
   }
 
   .group-header.pinned {
     z-index: 7;
     will-change: transform;
-    /* The pinned header floats over scrolling cards for as long as the group
-       is active; give it a firmer centre so the label never washes out, still
-       without hard edges. */
-    background: linear-gradient(
-      to bottom,
-      transparent 0%,
-      color-mix(in srgb, var(--bg-0) 65%, transparent) 28%,
-      color-mix(in srgb, var(--bg-0) 85%, transparent) 55%,
-      color-mix(in srgb, var(--bg-0) 65%, transparent) 78%,
-      transparent 100%
-    );
+  }
+
+  /* Pinned, it sits over live content rather than empty space, so it needs a
+     firmer body and a stronger edge to stay legible against anything. */
+  .group-header.pinned .chip {
+    background: color-mix(in srgb, var(--surface-4) 96%, transparent);
+    border-color: var(--border-3);
+    box-shadow: var(--shadow-2);
+    color: var(--text-1);
   }
 </style>
