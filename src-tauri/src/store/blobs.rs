@@ -229,7 +229,19 @@ pub fn resolve_blob_or_ref(
     if is_reference {
         ref_path.map(PathBuf::from)
     } else {
-        blob_path.map(|p| root.join("blobs").join(p))
+        // blob_path is stored with forward slashes ("ab/cd/<hash>"), and
+        // joining that verbatim yields a path with mixed separators. Ordinary
+        // file APIs accept it, which is why everything else worked, but the
+        // Windows shell does not: SHParseDisplayName answers E_INVALIDARG and
+        // "Show in folder" fails. Split on the stored separator and join
+        // component by component so the result is native throughout.
+        blob_path.map(|p| {
+            let mut out = root.join("blobs");
+            for part in p.split('/').filter(|s| !s.is_empty()) {
+                out.push(part);
+            }
+            out
+        })
     }
 }
 
@@ -237,6 +249,21 @@ pub fn resolve_blob_or_ref(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// The shell rejects a path with mixed separators even though every
+    /// ordinary file API accepts it, so assert the shape rather than existence.
+    #[test]
+    fn resolve_blob_uses_native_separators_throughout() {
+        let root = Path::new(r"C:\store");
+        let p = resolve_blob_or_ref(root, false, Some("ab/cd/deadbeef"), None).unwrap();
+        let s = p.to_string_lossy();
+        assert!(
+            !s.contains('/'),
+            "a forward slash survived into the resolved path: {s}"
+        );
+        assert!(s.ends_with("deadbeef"));
+        assert_eq!(p.components().count(), root.components().count() + 4);
+    }
 
     #[test]
     fn test_text_normalization_and_hashing() {

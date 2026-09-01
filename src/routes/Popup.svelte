@@ -742,6 +742,26 @@
     background: var(--accent-soft);
   }
 
+  /* The gear turns 140 degrees on hover over 0.8s, easing out so it arrives
+     rather than stops. The transform lives on the svg, not the button, so the
+     hover background stays still while only the glyph moves. */
+  .icon-btn svg {
+    transform: rotate(0deg);
+    transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .icon-btn:hover svg,
+  .icon-btn:focus-visible svg {
+    transform: rotate(140deg);
+  }
+
+  /* A spinning icon is exactly what reduced-motion is asking us not to do. */
+  :global(:root[data-reduce-motion]) .icon-btn svg,
+  :global(:root[data-reduce-motion]) .icon-btn:hover svg {
+    transform: none;
+    transition: none;
+  }
+
   .banner {
     position: fixed;
     top: 10px;
