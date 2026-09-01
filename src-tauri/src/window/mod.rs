@@ -8,14 +8,16 @@ pub mod vibrancy;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow, WM_ENTERSIZEMOVE,
-    WM_EXITSIZEMOVE, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+    GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, SetForegroundWindow,
+    SetWindowLongPtrW, GWL_EXSTYLE, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCLBUTTONDOWN,
+    WM_NCLBUTTONUP, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
 
 use crate::error::{AppError, AppResult};
@@ -286,6 +288,15 @@ pub fn show_settings(app: &AppHandle) -> AppResult<()> {
         .ok_or_else(|| AppError::Other("settings window not found".into()))?;
     position::center_on_cursor_monitor(&win)?;
     win.show().map_err(tauri_err)?;
+    // After the show, not before: showing the window puts WS_EX_APPWINDOW back,
+    // so setting the style once at startup was undone every time.
+    //
+    // Tauri's own set_skip_taskbar is deliberately not used. It re-shows the
+    // window to apply the change, and the deactivation that causes was read by
+    // the dismissal below as the user clicking away — the settings window shut
+    // itself the moment it opened.
+    keep_out_of_taskbar(&win);
+    *SETTINGS_SHOWN_AT.lock().unwrap() = Some(Instant::now());
     win.set_focus().map_err(tauri_err)?;
     Ok(())
 }
@@ -318,6 +329,36 @@ fn foreground_is_ours() -> bool {
 /// file dialogs must not count as losing it.
 static SETTINGS_WIRED: AtomicBool = AtomicBool::new(false);
 
+/// When the settings window was last shown. Focus settles over a few frames —
+/// the popup is still hiding, the shell is still handing activation over — and
+/// a deactivation seen in that gap is not the user clicking away.
+static SETTINGS_SHOWN_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+const SETTINGS_FOCUS_GRACE: Duration = Duration::from_millis(600);
+
+fn settling_after_show() -> bool {
+    matches!(*SETTINGS_SHOWN_AT.lock().unwrap(), Some(t) if t.elapsed() < SETTINGS_FOCUS_GRACE)
+}
+
+/// Keeps the settings window out of the taskbar.
+///
+/// `skipTaskbar` in tauri.conf.json is not enough on its own: tao asks the
+/// shell to drop the button, which leaves `WS_EX_APPWINDOW` in place, and the
+/// button was measurably still there. A tool window never gets one. It is
+/// applied while the window is still hidden, which is when the style is free
+/// to change; on a visible window Windows would need it re-shown to take.
+fn keep_out_of_taskbar(window: &WebviewWindow) {
+    let Ok(hwnd) = window.hwnd() else {
+        tracing::warn!("settings window has no HWND; it may show a taskbar button");
+        return;
+    };
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let next = (ex & !(WS_EX_APPWINDOW.0 as isize)) | WS_EX_TOOLWINDOW.0 as isize;
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
+    }
+}
+
 fn wire_settings_dismissal(window: &WebviewWindow) {
     if SETTINGS_WIRED.swap(true, Ordering::SeqCst) {
         return;
@@ -328,7 +369,7 @@ fn wire_settings_dismissal(window: &WebviewWindow) {
             api.prevent_close();
             let _ = win.hide();
         }
-        WindowEvent::Focused(false) if !foreground_is_ours() => {
+        WindowEvent::Focused(false) if !foreground_is_ours() && !settling_after_show() => {
             let _ = win.hide();
         }
         _ => {}
@@ -340,6 +381,7 @@ fn wire_settings_dismissal(window: &WebviewWindow) {
 /// outside-click dismissal, which needs to happen before it can be shown.
 pub fn apply_backdrop(window: &WebviewWindow) -> AppResult<()> {
     if window.label() == SETTINGS_LABEL {
+        keep_out_of_taskbar(window);
         wire_settings_dismissal(window);
     }
     if window.label() == POPUP_LABEL {
