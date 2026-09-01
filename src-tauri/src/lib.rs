@@ -253,6 +253,9 @@ pub fn run() {
             commands::get_clipboard_history_enabled,
             commands::set_clipboard_history_enabled,
             commands::hide_popup,
+            commands::hide_tray_menu,
+            commands::quit_app,
+            commands::get_capture_enabled,
             commands::show_settings_window,
             commands::popup_ready,
         ])

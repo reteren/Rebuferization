@@ -22,6 +22,7 @@ use crate::AppState;
 
 pub const POPUP_LABEL: &str = "popup";
 pub const SETTINGS_LABEL: &str = "settings";
+pub const TRAYMENU_LABEL: &str = "traymenu";
 
 /// True while the popup is inside Windows' modal move/size loop (a resize
 /// drag). Dragging a window's edge can transiently deactivate it, and the
@@ -257,6 +258,27 @@ fn is_own_window(app: &AppHandle, hwnd: HWND) -> bool {
 }
 
 /// Centers the settings window on the cursor's monitor and shows it.
+/// Shows the tray menu at the cursor. It is our own window rather than a
+/// native one because a native HMENU cannot be themed: Windows paints it, and
+/// no amount of CSS reaches it. The cost is that dismissal, sizing and
+/// placement are ours to handle.
+pub fn show_tray_menu(app: &AppHandle) -> AppResult<()> {
+    let win = app
+        .get_webview_window(TRAYMENU_LABEL)
+        .ok_or_else(|| AppError::Other("tray menu window missing".into()))?;
+    position::place_at_cursor(&win)?;
+    win.show().map_err(tauri_err)?;
+    win.set_focus().map_err(tauri_err)?;
+    Ok(())
+}
+
+pub fn hide_tray_menu(app: &AppHandle) -> AppResult<()> {
+    if let Some(win) = app.get_webview_window(TRAYMENU_LABEL) {
+        win.hide().map_err(tauri_err)?;
+    }
+    Ok(())
+}
+
 pub fn show_settings(app: &AppHandle) -> AppResult<()> {
     let win = app
         .get_webview_window(SETTINGS_LABEL)

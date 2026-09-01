@@ -18,6 +18,7 @@ export default defineConfig({
       input: {
         popup: resolve(__dirname, 'index.html'),
         settings: resolve(__dirname, 'settings.html'),
+        traymenu: resolve(__dirname, 'traymenu.html'),
       },
     },
   },

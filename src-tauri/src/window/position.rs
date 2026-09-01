@@ -68,6 +68,38 @@ pub fn place_popup(window: &WebviewWindow, ws: &WindowSettings) -> AppResult<()>
     Ok(())
 }
 
+/// Places a window at the cursor without resizing it, clamped so the whole
+/// thing stays on the monitor under the pointer. Used by the tray menu, which
+/// has a fixed size and should appear where the click happened.
+pub fn place_at_cursor(window: &WebviewWindow) -> AppResult<()> {
+    let hwnd = window.hwnd().map_err(tauri_err)?;
+    let pt = cursor_point()?;
+    // FFI: MonitorFromPoint never fails and returns a valid HMONITOR.
+    let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
+    let (work, _scale) = work_area(monitor)?;
+
+    let size = window.outer_size().map_err(tauri_err)?;
+    let (w, h) = (size.width, size.height);
+    // A tray click is near an edge by definition, so the clamp is doing real
+    // work here rather than guarding an unlikely case.
+    let (x, y) = clamp_pos_to_work(pt.x, pt.y, w as i32, h as i32, &work);
+
+    // FFI: hwnd/x/y are derived from live Win32 state in this call.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            w as i32,
+            h as i32,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+        .map_err(|e| AppError::Win(format!("SetWindowPos: {e}")))?;
+    }
+    Ok(())
+}
+
 /// Centers the window on the work area of the monitor under the cursor,
 /// preserving its current logical size. Used by the settings window.
 pub fn center_on_cursor_monitor(window: &WebviewWindow) -> AppResult<()> {

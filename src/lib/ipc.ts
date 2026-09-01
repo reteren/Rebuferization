@@ -41,6 +41,21 @@ export function getTabCounts(): Promise<TabCounts> {
 
 /// The item sitting on the clipboard right now, or null when we cannot know —
 /// after a restart, or when something we never captured was copied.
+/// Dismisses the tray menu window.
+export function hideTrayMenu(): Promise<void> {
+  return invoke<void>('hide_tray_menu')
+}
+
+/// Quits the app. Captures are written synchronously, so nothing is lost.
+export function quitApp(): Promise<void> {
+  return invoke<void>('quit_app')
+}
+
+/// Whether clipboard capture is on, for the tray menu's label.
+export function getCaptureEnabled(): Promise<boolean> {
+  return invoke<boolean>('get_capture_enabled')
+}
+
 export function getCurrentClipboardId(): Promise<number | null> {
   return invoke<number | null>('get_current_clipboard_id')
 }

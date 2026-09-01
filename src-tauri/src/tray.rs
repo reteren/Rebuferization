@@ -4,20 +4,11 @@
 
 use std::io::Cursor;
 
-use once_cell::sync::Lazy;
-use parking_lot::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::AppHandle;
 
 use crate::error::{AppError, AppResult};
 
 const TRAY_ID: &str = "main";
-const SETTINGS_ITEM_ID: &str = "settings";
-const TOGGLE_ITEM_ID: &str = "toggle_capture";
-
-/// Handle to the Enable/Disable item, kept so `set_capture_enabled` can swap
-/// its label without rebuilding the menu.
-static TOGGLE_ITEM: Lazy<Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>> =
-    Lazy::new(|| Mutex::new(None));
 
 /// Loads the bundled 32×32 icon and derives the muted variant by desaturating
 /// it in memory — no second asset to keep in sync.
@@ -56,47 +47,31 @@ pub fn install(app: &AppHandle) -> AppResult<()> {
     // initial label and muted state come from a direct file peek.
     let behavior = crate::settings::peek_behavior();
 
-    let settings_item =
-        tauri::menu::MenuItem::with_id(app, SETTINGS_ITEM_ID, "Settings", true, None::<&str>)
-            .map_err(tauri_err)?;
-    let toggle_item = tauri::menu::MenuItem::with_id(
-        app,
-        TOGGLE_ITEM_ID,
-        if behavior.capture_enabled {
-            "Disable"
-        } else {
-            "Enable"
-        },
-        true,
-        None::<&str>,
-    )
-    .map_err(tauri_err)?;
-    *TOGGLE_ITEM.lock() = Some(toggle_item.clone());
-
-    let menu =
-        tauri::menu::Menu::with_items(app, &[&settings_item, &toggle_item]).map_err(tauri_err)?;
-
+    // No native menu is attached. A tray HMENU is painted by Windows and no
+    // amount of CSS reaches it, so it could never follow the app's themes;
+    // right-click opens our own window instead, which can.
     let tray = tauri::tray::TrayIconBuilder::with_id(TRAY_ID)
         .icon(normal)
         .tooltip("Rebuffer")
-        .menu(&menu)
-        // Left-click must open the popup, right-click the menu.
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            SETTINGS_ITEM_ID => {
-                let _ = crate::window::show_settings(app);
-            }
-            TOGGLE_ITEM_ID => toggle_capture_from_tray(app),
-            _ => {}
-        })
         .on_tray_icon_event(|tray, event| {
             if let tauri::tray::TrayIconEvent::Click {
-                button: tauri::tray::MouseButton::Left,
+                button,
                 button_state: tauri::tray::MouseButtonState::Up,
                 ..
             } = event
             {
-                let _ = crate::window::show_popup(tray.app_handle());
+                let app = tray.app_handle();
+                match button {
+                    tauri::tray::MouseButton::Left => {
+                        let _ = crate::window::show_popup(app);
+                    }
+                    tauri::tray::MouseButton::Right => {
+                        if let Err(e) = crate::window::show_tray_menu(app) {
+                            tracing::error!("could not show the tray menu: {e}");
+                        }
+                    }
+                    _ => {}
+                }
             }
         })
         .build(app)
@@ -135,30 +110,8 @@ pub fn install(app: &AppHandle) -> AppResult<()> {
     Ok(())
 }
 
-/// Flips the capture toggle: settings, listener, and tray icon in one go —
-/// the same state `commands::set_capture_enabled` keeps consistent.
-fn toggle_capture_from_tray(app: &AppHandle) {
-    let Some(state) = app.try_state::<crate::AppState>() else {
-        tracing::warn!("tray toggle before AppState was managed");
-        return;
-    };
-    let enabled = !state.settings.get().behavior.capture_enabled;
-    if let Err(e) = state
-        .settings
-        .patch(serde_json::json!({ "behavior": { "captureEnabled": enabled } }))
-    {
-        tracing::warn!("failed to persist capture toggle: {e}");
-        return;
-    }
-    state.clipboard.set_enabled(enabled);
-    if let Err(e) = set_capture_enabled(app, enabled) {
-        tracing::warn!("failed to update tray icon: {e}");
-    }
-    let _ = app.emit(crate::model::events::SETTINGS_CHANGED, state.settings.get());
-}
-
 /// Swaps to the muted icon variant while capture is disabled, and updates the
-/// menu item label.
+/// the tray icon between its normal and muted variants.
 pub fn set_capture_enabled(app: &AppHandle, enabled: bool) -> AppResult<()> {
     let (normal, muted) = icons()?;
     let tray = app
@@ -166,9 +119,7 @@ pub fn set_capture_enabled(app: &AppHandle, enabled: bool) -> AppResult<()> {
         .ok_or_else(|| AppError::Other("tray icon not found".into()))?;
     tray.set_icon(Some(if enabled { normal } else { muted }))
         .map_err(tauri_err)?;
-    if let Some(item) = TOGGLE_ITEM.lock().as_ref() {
-        item.set_text(if enabled { "Disable" } else { "Enable" })
-            .map_err(tauri_err)?;
-    }
+    // The menu is a webview window now and reads the state itself when it
+    // opens, so there is no label here to keep in sync.
     Ok(())
 }

@@ -329,6 +329,25 @@ pub fn clear_history(
     Ok(result)
 }
 
+/// Dismisses the tray menu. Its own window, so its own hide.
+#[tauri::command]
+pub fn hide_tray_menu(app: AppHandle) -> AppResult<()> {
+    crate::window::hide_tray_menu(&app)
+}
+
+/// Quits the application from the tray menu. The store writes every capture
+/// synchronously, so there is nothing to flush before going.
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+/// Whether clipboard capture is currently on, for the tray menu's label.
+#[tauri::command]
+pub fn get_capture_enabled(state: State<'_, AppState>) -> bool {
+    state.clipboard.is_enabled()
+}
+
 #[tauri::command]
 pub fn hide_popup(app: AppHandle) -> AppResult<()> {
     crate::window::hide_popup(&app)
