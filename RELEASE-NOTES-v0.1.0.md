@@ -1,18 +1,18 @@
 # Rebuffer v0.1.0
 
 A fast, persistent clipboard history for Windows. Everything you copy stays for
-30 days — text, images, GIFs, videos, files — and comes back with `Alt+V`.
+30 days: text, images, GIFs, videos and files, all back with `Alt+V`.
 
 ## Install
 
 Download **`Rebuffer_0.1.0_x64-setup.exe`** below and run it.
 
 > **SmartScreen will warn on first run.** The build is not code-signed. Choose
-> *More info → Run anyway*, or build from source — the steps are in the README.
+> *More info → Run anyway*, or build from source, with the steps in the README.
 
 The installer offers one option, unticked by default: disable Windows' own
 `Win+V` history so the two do not compete. It writes a single per-user registry
-value, and the uninstaller offers to put it back — but only when the installer
+value, and the uninstaller offers to put it back, but only when the installer
 was the one that changed it. The same switch is in Settings → General.
 
 ## What it does
