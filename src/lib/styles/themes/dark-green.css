@@ -2,7 +2,8 @@
    Deep, slightly desaturated greens for the surfaces, like a terminal with
    taste: a muted green-black ground, one bright emerald accent, and a mint
    success colour that stays separable from both. */
-:root[data-theme="dark-green"] {
+:root[data-theme="dark-green"],
+[data-theme="dark-green"] {
   color-scheme: dark;
 
   /* ---- surfaces ------------------------------------------------------ */
@@ -45,9 +46,9 @@
   /* ---- accent -------------------------------------------------------- */
   /* Bright emerald: still reads as green, but light enough to clear the deep
      muted surfaces that mark the item currently on the clipboard. */
-  --accent: #6ee787;
+  --accent: #40ac3e;
   /* Dark green-black for text ON the accent — 10.9:1 on #6EE787. */
-  --on-accent: #06210f;
+  --on-accent: #0a0d14;
 
   /* ---- ext palette --------------------------------------------------- */
   --ext-1: #7aa2ff;

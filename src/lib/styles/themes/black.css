@@ -1,5 +1,6 @@
 /* Theme: black — a true OLED-black theme.
-   Contract per docs/THEMES.md: one :root[data-theme="black"] block, colour
+   Contract per docs/THEMES.md: one :root[data-theme="black"],
+[data-theme="black"] block, colour
    tokens only. --accent-soft / --accent-strong / --danger-soft derive via
    color-mix from --accent / --danger and are intentionally NOT redefined.
    --bg-0 is pure #000; every surface lifts off it in small, cool-tinted steps
@@ -37,8 +38,8 @@
   --text-bright: #ffffff;
 
   /* ---- accent: a cool blue in the app's family, chosen to pop on black */
-  --accent: #6ea9ff;
-  --on-accent: #060a12;                       /* near-black text on the blue */
+  --accent: #c2c2c2;
+  --on-accent: #0a0d14;                       /* near-black text on the blue */
 
   /* ---- ext hues: 7 distinct file-type labels, none near the blue accent */
   --ext-1: #3ddc9f;                           /* green */

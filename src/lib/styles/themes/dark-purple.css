@@ -2,7 +2,8 @@
    Deep violet surfaces, rich rather than neon. The default accent and several
    ext hues are already purple-ish, so the accent moves to a cyan-leaning blue
    and the purple ext hue shifts warm, keeping both separable from the ground. */
-:root[data-theme="dark-purple"] {
+:root[data-theme="dark-purple"],
+[data-theme="dark-purple"] {
   color-scheme: dark;
 
   /* ---- surfaces ------------------------------------------------------ */
@@ -41,8 +42,8 @@
   /* ---- accent -------------------------------------------------------- */
   /* Cyan-leaning: a violet accent would disappear into these surfaces, and
      the accent is what marks the item currently on the clipboard. */
-  --accent: #6fd3e8;
-  --on-accent: #06141a;
+  --accent: #9630c5;
+  --on-accent: #ffffff;
 
   /* ---- ext palette --------------------------------------------------- */
   --ext-1: #8fb8ff;

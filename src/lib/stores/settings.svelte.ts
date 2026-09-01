@@ -13,13 +13,19 @@ function applyAppearance(a: Settings['appearance']): void {
   // exist, and the UI would silently keep the previous theme's colours; fall
   // back to the built-in dark instead. 'dark' IS :root, so it carries no
   // attribute.
-  const theme: Theme = (THEMES as readonly string[]).includes(a.theme) ? (a.theme as Theme) : 'dark'
-  if (theme === 'dark') root.removeAttribute('data-theme')
+  const theme: Theme = (THEMES as readonly string[]).includes(a.theme)
+    ? (a.theme as Theme)
+    : 'darkblue'
+  if (theme === 'darkblue') root.removeAttribute('data-theme')
   else root.setAttribute('data-theme', theme)
 
-  // Every var(--accent) reference in tokens.css and the components follows
-  // this; --accent-soft / --accent-strong derive from it via color-mix.
-  root.style.setProperty('--accent', a.accent)
+  // The accent belongs to the theme. An inline property is the highest-priority
+  // source in CSS, so setting it unconditionally meant no theme could ever
+  // change its own accent — which is exactly what went wrong. An empty value
+  // means "follow the theme"; anything else is the user overriding it, and
+  // only then does the inline property go on.
+  if (a.accent) root.style.setProperty('--accent', a.accent)
+  else root.style.removeProperty('--accent')
   // global.css ships a reduced-motion override keyed on this attribute.
   if (a.reduceMotion) root.setAttribute('data-reduce-motion', '')
   else root.removeAttribute('data-reduce-motion')
@@ -57,8 +63,8 @@ export const DEFAULT_SETTINGS: Settings = {
     formatLabelSize: 'medium',
     animateGifs: true,
     reduceMotion: false,
-    theme: 'dark',
-    accent: '#7aa2ff',
+    theme: 'darkblue',
+    accent: '',
   },
   privacy: {
     respectClipboardFlags: true,

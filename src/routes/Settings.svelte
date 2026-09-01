@@ -21,14 +21,14 @@
     type UnlistenFn,
   } from '../lib/ipc'
   import { settings } from '../lib/stores/settings.svelte'
-  import { THEMES, THEME_LABELS } from '../lib/types'
+  import ThemePreview from '../lib/components/ThemePreview.svelte'
+  import { THEMES } from '../lib/types'
   import type {
     CleanupResult,
     ImportMode,
     SettingsPatch,
     StorageStats,
     StoreProgress,
-    Theme,
   } from '../lib/types'
 
   const MB = 1024 * 1024
@@ -419,6 +419,17 @@ function resetEverything(): void {
       error = String(err)
     })
 }
+  /// What --accent resolves to right now: the override when set, otherwise
+  /// whatever the active theme defines. Read from the document so the picker
+  /// shows the real colour rather than an empty value.
+  const effectiveAccent = $derived.by(() => {
+    const custom = settings.current.appearance.accent
+    if (custom) return custom
+    void settings.current.appearance.theme // re-read when the theme changes
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+    return v || '#7aa2ff'
+  })
+
 </script>
 
 <div class="settings">
@@ -699,19 +710,19 @@ function resetEverything(): void {
         <h2>Appearance</h2>
 
         <div class="field">
-          <label class="field-label">
-            Theme
-            <select
-              value={settings.current.appearance.theme}
-              onchange={(e) =>
-                patch({ appearance: { theme: e.currentTarget.value as Theme } })}
-            >
-              {#each THEMES as t}
-                <option value={t}>{THEME_LABELS[t]}</option>
-              {/each}
-            </select>
-          </label>
-          <p class="hint">Applies to both windows immediately.</p>
+          <span class="field-label">Theme</span>
+          <div class="theme-strip" role="group" aria-label="Theme">
+            {#each THEMES as t}
+              <ThemePreview
+                theme={t}
+                selected={settings.current.appearance.theme === t}
+                onselect={(v) => patch({ appearance: { theme: v } })}
+              />
+            {/each}
+          </div>
+          <p class="hint">
+            Applies to both windows immediately. Each theme brings its own accent.
+          </p>
         </div>
 
         <div class="field">
@@ -859,12 +870,26 @@ function resetEverything(): void {
           <div class="row">
             <input
               type="color"
-              value={settings.current.appearance.accent}
+              value={effectiveAccent}
               aria-label="Accent color"
               onchange={(e) => patch({ appearance: { accent: e.currentTarget.value } })}
             />
-            <code>{settings.current.appearance.accent}</code>
+            <code>{settings.current.appearance.accent || effectiveAccent}</code>
+            {#if settings.current.appearance.accent}
+              <button
+                type="button"
+                class="linkish"
+                onclick={() => patch({ appearance: { accent: '' } })}
+              >
+                Follow theme
+              </button>
+            {/if}
           </div>
+          <p class="hint">
+            {settings.current.appearance.accent
+              ? 'Overriding the theme’s accent.'
+              : 'Following the theme’s accent. Pick a colour to override it.'}
+          </p>
         </div>
       </section>
 
@@ -1103,7 +1128,7 @@ function resetEverything(): void {
   input[type='number']:focus,
   input[type='text']:focus,
   select:focus {
-    border-color: var(--accent, #7aa2ff);
+    border-color: var(--accent);
   }
 
   button {
@@ -1140,7 +1165,7 @@ function resetEverything(): void {
   }
 
   .toggle input {
-    accent-color: var(--accent, #7aa2ff);
+    accent-color: var(--accent);
     margin: 0;
   }
 
@@ -1158,7 +1183,7 @@ function resetEverything(): void {
   }
 
   .radios input {
-    accent-color: var(--accent, #7aa2ff);
+    accent-color: var(--accent);
     margin: 0;
   }
 
@@ -1300,7 +1325,7 @@ function resetEverything(): void {
 
   .progress-fill {
     height: 100%;
-    background: var(--accent, #7aa2ff);
+    background: var(--accent);
     transition: width 0.2s;
   }
 
@@ -1327,5 +1352,30 @@ function resetEverything(): void {
     background: rgba(0, 0, 0, 0.18);
     color: inherit;
     font-weight: 600;
+  }
+
+  .linkish {
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--accent);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .linkish:hover {
+    color: var(--accent-strong);
+  }
+
+  /* One scrollable row rather than a wrapping grid: the themes are a short
+     list to skim, and a row keeps the section from dominating the page. */
+  .theme-strip {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 4px 2px 10px;
+    scrollbar-width: thin;
   }
 </style>

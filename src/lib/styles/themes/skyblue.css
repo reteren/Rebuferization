@@ -1,8 +1,9 @@
-/* Theme: blue — light, cool and airy with a clear blue cast.
+/* Theme: skyblue — light, cool and airy with a clear blue cast.
    One block, colour tokens only. Structural tokens stay shared.
    Surfaces are pale steel-white so the vivid --accent stays the only
    saturated blue; that is what marks the live clipboard item. */
-:root[data-theme="blue"] {
+:root[data-theme="skyblue"],
+[data-theme="skyblue"] {
   color-scheme: light;
 
   /* ---- surfaces ------------------------------------------------------ */
@@ -38,8 +39,8 @@
   --text-bright: #ffffff;                /* white glyphs over media and chips */
 
   /* ---- accent (overridden at runtime from settings) ------------------ */
-  --accent: #7aa2ff;
-  --on-accent: #0a1730;                  /* near-black navy on the accent */
+  --accent: #c2e4ff;
+  --on-accent: #0a0d14;                  /* near-black navy on the accent */
 
   /* ---- ext palette (file-extension accent hues, kept off --accent) --- */
   --ext-1: #d13b56;                      /* rose — images */

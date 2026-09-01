@@ -1,7 +1,8 @@
 /* Theme: grey — see docs/THEMES.md for the contract.
    Deliberately desaturated neutral grey ground: no blue or warm cast in any
    surface, so the accent is the only saturated thing on screen. */
-:root[data-theme="grey"] {
+:root[data-theme="grey"],
+[data-theme="grey"] {
   color-scheme: dark;
 
   /* ---- surfaces ------------------------------------------------------ */
@@ -43,8 +44,8 @@
   /* Sea-teal, the only saturated colour in the theme. Cool-leaning so it never
      reads warm against the neutral grey, and off the blue family of the ext
      hues. On it, a near-black picks up the teal ground (9.1:1). */
-  --accent: #2ed9b0;
-  --on-accent: #06241d;
+  --accent: #a6a6a6;
+  --on-accent: #0a0d14;
 
   /* ---- ext palette --------------------------------------------------- */
   /* Seven hues spread around the wheel and clear of the teal accent, which

@@ -1,0 +1,49 @@
+/* Theme: dark blue — the default, and the reference the other five were
+   written against. It lives here rather than inline in tokens.css so a preview
+   swatch can request it by name like any other theme; :root is listed first so
+   it stays the fallback when no data-theme is set. */
+:root,
+:root[data-theme="darkblue"],
+[data-theme="darkblue"] {
+  color-scheme: dark;
+
+  --bg-0: #0c0e13;                          /* deepest backdrop */
+  --bg-1: rgba(16, 18, 24, 0.72);           /* window wash */
+  --surface-1: rgba(26, 29, 38, 0.78);      /* cards */
+  --surface-2: rgba(30, 34, 44, 0.82);      /* raised controls */
+  --surface-3: rgba(38, 42, 55, 0.92);      /* popovers */
+  --surface-4: rgba(46, 51, 66, 0.95);      /* hovered controls */
+  --swatch-empty: #3a3f4b;                  /* color-preview fallback when value is missing */
+  --overlay-1: rgba(255, 255, 255, 0.06);   /* faint white wash: card hover veil, chip fills */
+  --scrim-1: rgba(8, 10, 15, 0.55);         /* dark scrim: play button, color chip */
+  --scrim-2: rgba(10, 13, 18, 0.55);        /* dark scrim: badges over previews */
+  --border-1: rgba(255, 255, 255, 0.07);
+  --border-2: rgba(255, 255, 255, 0.13);
+  --border-3: rgba(255, 255, 255, 0.22);
+  --window-border: rgba(255, 255, 255, 0.08);  /* 1px inner glass border */
+  --border-media-1: rgba(255, 255, 255, 0.14); /* color chip hairline over scrim */
+  --border-media-2: rgba(255, 255, 255, 0.18); /* play button ring over scrim */
+  --text-1: #e9ecf4;
+  --text-2: rgba(233, 236, 244, 0.62);
+  --text-3: rgba(233, 236, 244, 0.38);
+  --text-bright: #ffffff;                   /* pure white glyphs over media and chips */
+  --accent: #7aa2ff;
+  --on-accent: #0a0d14;
+  --ext-1: #7aa2ff;
+  --ext-2: #4ec9b0;
+  --ext-3: #bb9af7;
+  --ext-4: #e0af68;
+  --ext-5: #f7768e;
+  --ext-6: #2ac3de;
+  --ext-7: #9ece6a;
+  --danger: #f7768e;
+  --ok: #4ec9b0;
+  --warn: #e0af68;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 18px 60px rgba(0, 0, 0, 0.55);
+  --window-wash:
+    radial-gradient(130% 90% at 8% -12%, rgba(122, 162, 255, 0.09), transparent 55%),
+    radial-gradient(110% 80% at 96% 112%, rgba(78, 201, 176, 0.06), transparent 55%),
+    radial-gradient(70% 60% at 55% 45%, rgba(187, 154, 247, 0.04), transparent 60%);
+}

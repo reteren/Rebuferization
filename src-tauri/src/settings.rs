@@ -84,7 +84,7 @@ pub struct BehaviorSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppearanceSettings {
-    /// Theme name: "dark" (built in) or one of the files under
+    /// Theme name: "darkblue" (built in) or one of the files under
     /// src/lib/styles/themes/. Unknown values fall back to "dark" rather than
     /// leaving the UI unstyled.
     pub theme: String,
@@ -168,12 +168,12 @@ impl Default for BehaviorSettings {
 impl Default for AppearanceSettings {
     fn default() -> Self {
         AppearanceSettings {
-            theme: "dark".into(),
+            theme: "darkblue".into(),
             show_age: true,
             format_label_size: "medium".into(),
             animate_gifs: true,
             reduce_motion: false,
-            accent: "#7aa2ff".into(),
+            accent: String::new(),
         }
     }
 }
@@ -227,13 +227,30 @@ fn is_valid_hex(s: &str) -> bool {
 }
 
 /// Post-deserialization clamp. Sanitization at the JSON level happens first
+/// Mirrors THEMES in src/lib/types.ts. A name absent from both is not a theme.
+const THEMES: [&str; 7] = [
+    "darkblue",
+    "black",
+    "light",
+    "grey",
+    "skyblue",
+    "dark-green",
+    "dark-purple",
+];
+
 /// (`sanitize_json`); this catches anything the type system let through.
 pub fn validate(s: &mut Settings) {
     s.storage.retention_days = s.storage.retention_days.clamp(1, 30);
     s.window.zoom_step = s.window.zoom_step.clamp(1, 5);
     s.window.percent_of_monitor = s.window.percent_of_monitor.clamp(10, 100);
-    if !is_valid_hex(&s.appearance.accent) {
+    // Empty means "follow the theme's accent", which is the default; only a
+    // non-empty value is an override and has to be a real colour.
+    if !s.appearance.accent.is_empty() && !is_valid_hex(&s.appearance.accent) {
         s.appearance.accent = AppearanceSettings::default().accent;
+    }
+    // An unknown theme name would leave the UI on whatever was loaded before.
+    if !THEMES.contains(&s.appearance.theme.as_str()) {
+        s.appearance.theme = AppearanceSettings::default().theme;
     }
     if !SIZE_MODES.contains(&s.window.size_mode.as_str()) {
         s.window.size_mode = WindowSettings::default().size_mode;
@@ -842,12 +859,31 @@ mod tests {
         assert_eq!(s.window.percent_of_monitor, 42);
     }
 
+    /// The default accent is now EMPTY, meaning "follow the theme". A bad
+    /// value must fall back to that rather than to a hardcoded blue, or a
+    /// typo in settings.json would pin every theme to the dark theme's accent.
     #[test]
-    fn accent_falls_back_to_default() {
+    fn accent_falls_back_to_following_the_theme() {
         let v = sanitized(json!({ "appearance": { "accent": "hotpink" } }));
-        assert_eq!(as_settings(v).appearance.accent, "#7aa2ff");
+        assert_eq!(as_settings(v).appearance.accent, "");
         let v = sanitized(json!({ "appearance": { "accent": 42 } }));
-        assert_eq!(as_settings(v).appearance.accent, "#7aa2ff");
+        assert_eq!(as_settings(v).appearance.accent, "");
+    }
+
+    /// An explicit colour is still honoured — the setting is an override, not
+    /// a dead control.
+    #[test]
+    fn explicit_accent_survives_validation() {
+        let v = sanitized(json!({ "appearance": { "accent": "#ff8800" } }));
+        assert_eq!(as_settings(v).appearance.accent, "#ff8800");
+    }
+
+    #[test]
+    fn unknown_theme_falls_back_to_the_built_in_one() {
+        let v = sanitized(json!({ "appearance": { "theme": "chartreuse" } }));
+        assert_eq!(as_settings(v).appearance.theme, "darkblue");
+        let v = sanitized(json!({ "appearance": { "theme": "dark-green" } }));
+        assert_eq!(as_settings(v).appearance.theme, "dark-green");
     }
 
     #[test]
@@ -988,7 +1024,7 @@ mod tests {
         assert_eq!(s.storage.retention_days, 1);
         assert_eq!(s.window.zoom_step, 5);
         assert_eq!(s.window.percent_of_monitor, 10);
-        assert_eq!(s.appearance.accent, "#7aa2ff");
+        assert_eq!(s.appearance.accent, "");
     }
 
     // -----------------------------------------------------------------------

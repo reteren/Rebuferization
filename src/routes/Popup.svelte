@@ -736,8 +736,8 @@
   }
 
   .icon-btn:hover {
-    color: var(--text-1);
-    background: var(--overlay-1);
+    color: var(--accent-strong);
+    background: var(--accent-soft);
   }
 
   .banner {

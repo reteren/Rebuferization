@@ -1,25 +1,25 @@
 // Mirror of src-tauri/src/model.rs and settings.rs. Change one, change both.
 // Serde is configured camelCase, so field names match exactly.
 
-/// Selectable themes. 'dark' is the built-in one defined on :root; every other
+/// Selectable themes. 'darkblue' is the built-in one defined on :root; every other
 /// name has a file under lib/styles/themes/ and is applied via data-theme.
 export const THEMES = [
-  'dark',
+  'darkblue',
   'black',
   'light',
   'grey',
-  'blue',
+  'skyblue',
   'dark-green',
   'dark-purple',
 ] as const
 export type Theme = (typeof THEMES)[number]
 
 export const THEME_LABELS: Record<Theme, string> = {
-  dark: 'Dark',
+  darkblue: 'Dark blue',
   black: 'Black',
   light: 'Light',
   grey: 'Grey',
-  blue: 'Blue',
+  skyblue: 'Sky blue',
   'dark-green': 'Dark green',
   'dark-purple': 'Dark purple',
 }

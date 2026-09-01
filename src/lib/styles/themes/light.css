@@ -1,7 +1,8 @@
 /* Theme: light — see docs/THEMES.md for the contract.
    One block, colour tokens only. Structural tokens stay shared.
    Colour values computed for contrast — see the report for the measured ratios. */
-:root[data-theme="light"] {
+:root[data-theme="light"],
+[data-theme="light"] {
   color-scheme: light;
 
   /* ---- surfaces: soft cool off-white ground, white cards ------------- */
@@ -46,8 +47,8 @@
   --text-bright: #ffffff;                   /* white glyphs over media and chips */
 
   /* ---- accent: vivid blue, the app's family, deep enough for white text ---- */
-  --accent: #3563e8;
-  --on-accent: #ffffff;                     /* 5.1:1 on the accent (Add button, live badge) */
+  --accent: #b5b5b5;
+  --on-accent: #0a0d14;                     /* 5.1:1 on the accent (Add button, live badge) */
 
   /* ---- ext hues: seven file-type labels, distinct from each other and
      from the blue accent that marks the live item ------------------------ */
