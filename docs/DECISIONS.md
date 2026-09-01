@@ -27,7 +27,7 @@ activatable window. The "focus flicker" downside is largely mitigated here:
 
 **Target:** < 80 ms. **Measured: median 4.1 ms, worst 7.0 ms over 15 samples — PASS.** Machine: DESKTOP-0MFACBN (AMD Ryzen 7 7800X3D, 16 logical cores), Windows 11, debug build.
 
-Method (reproducible — `scripts/latency.ps1`): with the app running and the popup hidden, a C# probe records a high-resolution timestamp (`Stopwatch.GetTimestamp`), injects `Alt+V` via `keybd_event` (the same chord the physical hotkey uses; `RegisterHotKey` fires on injected input), then busy-polls `IsWindowVisible(hwnd)` on a separate thread until the flag flips. Delta = chord-sent → `WS_VISIBLE` set. The popup is toggled closed between samples with a second `Alt+V` so every sample starts from the same hidden state. 15 samples: best 2.151 ms, median 4.125 ms, mean 4.397 ms, worst 7.003 ms.
+Method (reproducible): with the app running and the popup hidden, a C# probe records a high-resolution timestamp (`Stopwatch.GetTimestamp`), injects `Alt+V` via `keybd_event` (the same chord the physical hotkey uses; `RegisterHotKey` fires on injected input), then busy-polls `IsWindowVisible(hwnd)` on a separate thread until the flag flips. Delta = chord-sent → `WS_VISIBLE` set. The popup is toggled closed between samples with a second `Alt+V` so every sample starts from the same hidden state. 15 samples: best 2.151 ms, median 4.125 ms, mean 4.397 ms, worst 7.003 ms.
 
 The path is: LL hook callback (atomics + `PostMessage`, no allocation — order of
 microseconds) or `WM_HOTKEY` delivery → `show_popup` → `GetCursorPos` +
@@ -60,7 +60,7 @@ there too.
 
 Verified against the fresh debug build (post-commit bd8087e, `cargo build` green,
 96 tests pass) on DESKTOP-0MFACBN at 100 % DPI (window DPI = system DPI = 96).
-Evidence: 1:1 `CopyFromScreen` captures + OCR + pixel scans in `scripts/`
+Evidence: 1:1 `CopyFromScreen` captures with OCR and pixel scans
 (`verify11.png`, `state2.png`, `sc_00..09.png`, `verify_popup.ps1`,
 `verify_11.ps1`, `gap_scan.ps1`, `popup_inspect.ps1`).
 
@@ -92,15 +92,13 @@ only prunes rows with a missing *primary* blob, never a missing thumbnail.
 116 px → 72 px tiles); arrows move focus — YES (2×ArrowRight then Enter copied
 the 3rd grid item); Enter copies the focused item and closes (closeOnCopy) — YES.
 
-**The full variety matrix now verified visually** (capture `scripts/lock_toprow.png`,
-taken under the `scripts/.app-lock` protocol with a fresh app instance whose
+**The full variety matrix verified visually**, with a fresh app instance whose
 frontend loaded freshly-seeded items): the hex-colour card renders the `#3D8BFD`
 swatch (≈37 k pixels of the exact colour filling the preview area), the code card
 renders the JSON preview in mono (`"schema":`, `"version": 1`, `"items":`…), and
 the link card renders the favicon (green gradient square) plus the 16m/17m/18m
 age badges. Earlier attempts were sabotaged by concurrent verifiers fighting over
-the single app instance (the coordinator's `scripts/APP-LOCK.md` convention
-landed mid-run); under the lock, a single restart + capture produced everything.
+the single app instance; under the lock, a single restart + capture produced everything.
 
 **Other findings recorded for the owners:**
 1. `janitor::startup_sweep` is O(blob files) with a `COUNT(*)` per file —
@@ -108,8 +106,7 @@ landed mid-run); under the lock, a single restart + capture produced everything.
    (details in `docs/PERF.md`).
 2. Several concurrent `rebuffer.exe` instances were observed running at once
    (three at one point) despite the single-instance plugin — rapid restart races
-   can slip past the guard (the later `scripts/.app-lock` convention now
-   serializes the verifiers that caused this).
+   can slip past the guard .
 3. Intermittently the popup opened and dismissed itself within ~20 ms (focus-loss
    race on foreground handoff; reproduced once, see latency section above).
 4. CDP is unreachable with the shipped config (wry overrides the WebView2

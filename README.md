@@ -20,8 +20,30 @@ Rebuffer is a replacement for the built-in Windows `Win+V` clipboard history: a 
 | Idle RAM, main process | **45.8 MB median** | < 60 MB |
 | Idle CPU | **0 %** (max 0.36 % of one core) | 0 % |
 | 200-item store page at 10,000 items | **≈ 0.9 ms** | < 10 ms |
+| Cold start to tray-ready, 10,000-item store | **1.13 s** | < 1.5 s |
+| Startup integrity sweep, 10,000 items | **151 ms** (release) | — |
 
-**Known miss, under repair:** cold start to tray-ready at 10,000 items was 53 s against the 1.5 s target — the startup integrity sweep is being reworked. *(Number intentionally not quoted; it is about to change.)*
+**Known issues and untested ground** are listed honestly in
+[`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) — including what was verified
+only by reading rather than by running.
+
+---
+
+## Install
+
+Grab `Rebuffer_x.y.z_x64-setup.exe` from the
+[latest release](../../releases/latest) and run it.
+
+The installer offers one option, unticked by default: **disable Windows'
+own clipboard history (Win+V)**, so the two do not compete. It writes a
+single per-user registry value and the uninstaller offers to put it back —
+but only if the installer was the one that changed it. The same switch lives
+in Settings → General, so you can change your mind later.
+See [`docs/INSTALLER.md`](docs/INSTALLER.md).
+
+> **SmartScreen will warn on first run.** The build is not code-signed —
+> certificates cost money this project does not have. Choose *More info →
+> Run anyway*, or build it yourself with the steps below.
 
 ---
 
@@ -59,6 +81,16 @@ Rebuffer is a replacement for the built-in Windows `Win+V` clipboard history: a 
 - Export/import of history and settings
 
 ![The settings window](docs/img/settings.png)
+
+---
+
+**Appearance**
+
+- Eleven themes: dark blue, black, grey, light, sky blue, dark green, dark
+  purple, ember, ocean, wine and paper — each with its own accent, picked from
+  a strip of live previews that paint themselves in the theme they name
+- Any accent can be overridden per taste, or left to follow the theme
+- Zoom dial, configurable card badges, reduced-motion honoured
 
 ---
 
@@ -120,6 +152,7 @@ rebuffer/
 ├─ index.html / settings.html  # the two Vite entry points (popup and settings)
 ├─ src/                        # Svelte frontend
 │  ├─ popup.ts / settings.ts   # entry scripts for the two pages
+│  └─ lib/styles/themes/       # one file per theme, 36 colour tokens each
 │  ├─ routes/
 │  │  ├─ Popup.svelte          # the Alt+V window
 │  │  └─ Settings.svelte       # settings window
@@ -139,7 +172,8 @@ rebuffer/
 │  │  ├─ settings.rs / tray.rs / commands.rs / logging.rs / model.rs
 │  ├─ migrations/              # schema (0001_init.sql)
 │  └─ tauri.conf.json
-├─ docs/                       # SPEC, ROADMAP, DECISIONS, PERF, ...
+├─ docs/                       # SPEC, ROADMAP, DECISIONS, PERF, THEMES, ...
+├─ tools/gen_themes.py         # generates a theme's 36 tokens consistently
 └─ README.md
 ```
 
@@ -165,4 +199,4 @@ The store folder is configurable in Settings; changing it migrates existing data
 
 ## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE).

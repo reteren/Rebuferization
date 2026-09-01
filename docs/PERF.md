@@ -14,7 +14,7 @@ This document records the baseline persistence performance metrics for the Rebuf
 
 Measured on **DESKTOP-0MFACBN** (AMD Ryzen 7 7800X3D, 16 logical cores, Windows 11,
 debug build), 30 Aug 2026, by the W23 perf worker. The app sat in the tray (popup
-hidden) with a warm WebView2; scripts live in `scripts/` (`idle.ps1`, `coldstart.ps1`).
+hidden) with a warm WebView2.
 
 | Metric | Target | Measured | Verdict |
 |---|---|---|---|
@@ -22,7 +22,7 @@ hidden) with a warm WebView2; scripts live in `scripts/` (`idle.ps1`, `coldstart
 | Cold start to tray-ready, 7 043-item store | < 1.5 s | **~9.5 s** (old sweep) → **~1.3 s** with the W29 fix | MISS → PASS |
 | Cold start to tray-ready, 10 000-item store | < 1.5 s | **~53 s** (old sweep) → **~1.2–1.3 s** with the W29 fix | MISS → PASS |
 
-Cold-start notes (method: `scripts/coldstart.ps1` kills the app, spawns it, polls
+Cold-start notes (method: kill the app, spawn it, poll
 for the hidden popup window and matches the app's own log lines `rebuffer starting`
 and `hotkey Alt+V registered` — the last backend step before tray install — against
 the spawn time):

@@ -1,2 +1,0 @@
-{"id":"D7920AA184DC516CB72C9F279231D011","title":"about:blank","url":"http://localhost:1420/settings.html","type":"page"}
-{"id":"C41075A8B6C3675231370DE6D5D8B9A7","title":"Rebuffer","url":"http://localhost:1420/","type":"page"}

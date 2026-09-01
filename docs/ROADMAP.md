@@ -128,7 +128,7 @@ This is where it starts looking like your reference image.
 ## Phase 7 — Hardening and release (3–5 days)
 
 - [ ] Multi-monitor testing, including mixed DPI and vertical arrangements — *positioning is unit-tested incl. negative coordinates and clamping, but never run on real mixed-DPI hardware*
-- [x] 10,000-item stress test — scroll, search, and startup time — *measured in `docs/PERF.md` and `docs/PERF-UI.md`; the grid rendering bugs it exposed have been fixed*
+- [x] 10,000-item stress test — scroll, search, and startup time — *measured in `docs/PERF.md`; the grid rendering bugs it exposed have been fixed*
 - [ ] Copy from RDP sessions, VMs, and fullscreen games — *not tested*
 - [ ] Behaviour when the store volume is full or disconnected — *not tested*
 - [x] Database corruption recovery — *startup integrity sweep, orphan cleanup, corrupt-settings handling*
