@@ -119,7 +119,10 @@ impl Default for Settings {
 
 impl Default for HotkeySettings {
     fn default() -> Self {
-        HotkeySettings { binding: "Alt+V".into(), aggressive_mode: false }
+        HotkeySettings {
+            binding: "Alt+V".into(),
+            aggressive_mode: false,
+        }
     }
 }
 
@@ -148,7 +151,10 @@ impl Default for WindowSettings {
 
 impl Default for FixedSize {
     fn default() -> Self {
-        FixedSize { width: 1100, height: 700 }
+        FixedSize {
+            width: 1100,
+            height: 700,
+        }
     }
 }
 
@@ -208,7 +214,9 @@ impl Settings {
 
 /// `%APPDATA%\Rebuffer`.
 pub fn default_store_root() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("Rebuffer")
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Rebuffer")
 }
 
 // ---------------------------------------------------------------------------
@@ -294,7 +302,12 @@ fn sanitize_json(v: &mut Value) {
     });
 
     sanitize_section(root, "window", |o| {
-        require_one_of(o, "sizeMode", SIZE_MODES, &WindowSettings::default().size_mode);
+        require_one_of(
+            o,
+            "sizeMode",
+            SIZE_MODES,
+            &WindowSettings::default().size_mode,
+        );
         clamp_number(o, "percentOfMonitor", 10.0, 100.0);
         clamp_number(o, "zoomStep", 1.0, 5.0);
         sanitize_section(o, "fixed", |f| {
@@ -304,14 +317,26 @@ fn sanitize_json(v: &mut Value) {
     });
 
     sanitize_section(root, "behavior", |o| {
-        for key in ["autoPaste", "pasteAsPlainText", "closeOnCopy", "launchOnStartup", "silentStart", "captureEnabled"] {
+        for key in [
+            "autoPaste",
+            "pasteAsPlainText",
+            "closeOnCopy",
+            "launchOnStartup",
+            "silentStart",
+            "captureEnabled",
+        ] {
             require_bool(o, key);
         }
     });
 
     sanitize_section(root, "appearance", |o| {
         require_bool(o, "showAge");
-        require_one_of(o, "formatLabelSize", LABEL_SIZES, &AppearanceSettings::default().format_label_size);
+        require_one_of(
+            o,
+            "formatLabelSize",
+            LABEL_SIZES,
+            &AppearanceSettings::default().format_label_size,
+        );
         require_bool(o, "animateGifs");
         require_bool(o, "reduceMotion");
         match o.get_mut("accent") {
@@ -336,7 +361,11 @@ fn sanitize_json(v: &mut Value) {
     });
 }
 
-fn sanitize_section(obj: &mut Map<String, Value>, key: &str, f: impl FnOnce(&mut Map<String, Value>)) {
+fn sanitize_section(
+    obj: &mut Map<String, Value>,
+    key: &str,
+    f: impl FnOnce(&mut Map<String, Value>),
+) {
     match obj.get_mut(key) {
         Some(Value::Object(o)) => f(o),
         Some(_) => {
@@ -512,8 +541,14 @@ impl SettingsStore {
             Err(e) => return Err(e.into()),
         };
 
-        let state = Arc::new(Mutex::new(State { settings, file_mtime: mtime }));
-        let store = SettingsStore { path: path.to_path_buf(), state: state.clone() };
+        let state = Arc::new(Mutex::new(State {
+            settings,
+            file_mtime: mtime,
+        }));
+        let store = SettingsStore {
+            path: path.to_path_buf(),
+            state: state.clone(),
+        };
 
         // Hot reload: a plain mtime poll, deliberately not a filesystem-watcher
         // crate — this is a settings file, not a build system. The `file_mtime`
@@ -550,7 +585,9 @@ impl SettingsStore {
     /// the result. Callers emit `settings-changed` afterwards.
     pub fn patch(&self, patch: Value) -> AppResult<Settings> {
         if !patch.is_object() {
-            return Err(AppError::Other("settings patch must be a JSON object".into()));
+            return Err(AppError::Other(
+                "settings patch must be a JSON object".into(),
+            ));
         }
         let mut st = self.state.lock();
 
@@ -560,7 +597,8 @@ impl SettingsStore {
         let mut next: Settings = serde_json::from_value(merged)?;
         validate(&mut next);
 
-        let behavior_changed = st.settings.behavior.launch_on_startup != next.behavior.launch_on_startup
+        let behavior_changed = st.settings.behavior.launch_on_startup
+            != next.behavior.launch_on_startup
             || st.settings.behavior.silent_start != next.behavior.silent_start;
 
         write_atomic(&self.path, &next)?;
@@ -610,8 +648,12 @@ pub fn apply_autostart(behavior: &BehaviorSettings) {
 /// need the startup state before the store is managed (the tray installer).
 pub fn peek_behavior() -> BehaviorSettings {
     let path = default_store_root().join("settings.json");
-    let value = fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-    let Some(mut value) = value else { return BehaviorSettings::default() };
+    let value = fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    let Some(mut value) = value else {
+        return BehaviorSettings::default();
+    };
     sanitize_json(&mut value);
     serde_json::from_value::<Settings>(value)
         .map(|mut s| {
@@ -626,10 +668,10 @@ pub fn peek_behavior() -> BehaviorSettings {
 /// value without it. Uses the registry directly (the `Win32_System_Registry`
 /// feature is enabled transitively by the autostart plugin's `winreg`).
 pub fn rewrite_run_value(app_name: &str, silent: bool) -> AppResult<()> {
+    use windows::core::{w, PCWSTR};
     use windows::Win32::System::Registry::{
         RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ,
     };
-    use windows::core::{w, PCWSTR};
 
     let mut value = format!("\"{}\"", std::env::current_exe()?.display());
     if silent {
@@ -686,10 +728,7 @@ fn wide(s: &str) -> Vec<u16> {
 /// Maps a raw `EnableClipboardHistory` DWORD to "enabled". ABSENT means enabled
 /// (the Windows default), 0 means disabled, and any other value means enabled.
 fn clipboard_history_enabled_from_dword(value: Option<u32>) -> bool {
-    match value {
-        Some(0) => false,
-        _ => true,
-    }
+    !matches!(value, Some(0))
 }
 
 /// Reads the current state of Windows clipboard history for this user:
@@ -768,7 +807,8 @@ pub fn set_clipboard_history_enabled(enabled: bool) -> AppResult<()> {
     use windows::core::w;
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_DWORD,
+        RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE,
+        REG_DWORD,
     };
 
     let mut hkey = HKEY::default();
@@ -794,7 +834,13 @@ pub fn set_clipboard_history_enabled(enabled: bool) -> AppResult<()> {
     // SAFETY: the key handle is live and open for KEY_SET_VALUE; the slice is a
     // 4-byte DWORD little-endian, which is what REG_DWORD stores.
     let err = unsafe {
-        RegSetValueExW(hkey, w!("EnableClipboardHistory"), None, REG_DWORD, Some(&bytes))
+        RegSetValueExW(
+            hkey,
+            w!("EnableClipboardHistory"),
+            None,
+            REG_DWORD,
+            Some(&bytes),
+        )
     };
     // SAFETY: the key handle is still valid.
     unsafe {
@@ -900,10 +946,14 @@ mod tests {
 
     #[test]
     fn wrong_typed_field_falls_back_not_dies() {
-        let v = sanitized(json!({ "storage": { "retentionDays": "thirty", "notifyWhenFull": false } }));
+        let v =
+            sanitized(json!({ "storage": { "retentionDays": "thirty", "notifyWhenFull": false } }));
         let s = as_settings(v);
         assert_eq!(s.storage.retention_days, 30);
-        assert!(!s.storage.notify_when_full, "healthy sibling field must survive");
+        assert!(
+            !s.storage.notify_when_full,
+            "healthy sibling field must survive"
+        );
     }
 
     #[test]
@@ -950,9 +1000,15 @@ mod tests {
     #[test]
     fn blocked_processes_keeps_only_strings() {
         let v = sanitized(json!({ "privacy": { "blockedProcesses": ["keepass.exe", 7, null] } }));
-        assert_eq!(as_settings(v).privacy.blocked_processes, vec!["keepass.exe"]);
+        assert_eq!(
+            as_settings(v).privacy.blocked_processes,
+            vec!["keepass.exe"]
+        );
         let v = sanitized(json!({ "privacy": { "blockedProcesses": "keepass.exe" } }));
-        assert_eq!(as_settings(v).privacy.blocked_processes, PrivacySettings::default().blocked_processes);
+        assert_eq!(
+            as_settings(v).privacy.blocked_processes,
+            PrivacySettings::default().blocked_processes
+        );
     }
 
     #[test]
@@ -971,7 +1027,10 @@ mod tests {
         assert_eq!(base["behavior"]["launchOnStartup"], true);
         assert_eq!(base["behavior"]["silentStart"], false);
         assert_eq!(base["appearance"]["accent"], "#7aa2ff");
-        assert_eq!(base["privacy"]["blockedProcesses"], json!(["bitwarden.exe"]));
+        assert_eq!(
+            base["privacy"]["blockedProcesses"],
+            json!(["bitwarden.exe"])
+        );
         assert_eq!(base["storage"]["maxStoreBytes"], Value::Null);
     }
 
@@ -997,7 +1056,10 @@ mod tests {
             serde_json::from_slice(&fs::read(&path).expect("file exists")).expect("valid json");
         assert_eq!(on_disk["window"]["zoomStep"], 5);
         assert_eq!(on_disk["appearance"]["accent"], "#00ff00");
-        assert!(!path.with_extension("json.tmp").exists(), "no temp file left behind");
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "no temp file left behind"
+        );
     }
 
     #[test]
@@ -1056,7 +1118,10 @@ mod tests {
     #[test]
     fn clipboard_history_any_other_value_means_enabled() {
         for v in [2u32, 3, 42, 4_000_000_000, u32::MAX] {
-            assert!(clipboard_history_enabled_from_dword(Some(v)), "value {v} must map to enabled");
+            assert!(
+                clipboard_history_enabled_from_dword(Some(v)),
+                "value {v} must map to enabled"
+            );
         }
     }
 }

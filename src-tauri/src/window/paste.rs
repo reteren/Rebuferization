@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::Security::{
-    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL,
-    TOKEN_QUERY, TokenIntegrityLevel,
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel,
+    TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
 };
 use windows::Win32::System::Threading::{
     AttachThreadInput, GetCurrentThreadId, OpenProcess, OpenProcessToken,
@@ -122,7 +122,9 @@ pub fn send_paste() -> AppResult<()> {
         }
         Some(false) => {}
         None => {
-            tracing::warn!("send_paste: could not compare integrity levels with the target; injecting anyway");
+            tracing::warn!(
+                "send_paste: could not compare integrity levels with the target; injecting anyway"
+            );
         }
     }
 
@@ -229,10 +231,7 @@ fn integrity_level(pid: u32) -> Option<u32> {
         // itself, which is why the size is queried rather than assumed.
         let mut size = 0u32;
         let _ = GetTokenInformation(token, TokenIntegrityLevel, None, 0, &mut size);
-        let mut buf = vec![
-            0u8;
-            (size as usize).max(std::mem::size_of::<TOKEN_MANDATORY_LABEL>())
-        ];
+        let mut buf = vec![0u8; (size as usize).max(std::mem::size_of::<TOKEN_MANDATORY_LABEL>())];
         let got = GetTokenInformation(
             token,
             TokenIntegrityLevel,
@@ -264,7 +263,13 @@ fn key_input(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY, up: b
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
-            ki: KEYBDINPUT { wVk: vk, wScan: 0, dwFlags: flags, time: 0, dwExtraInfo: 0 },
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
         },
     }
 }
@@ -305,7 +310,10 @@ mod tests {
     #[test]
     fn held_alt_is_released_before_ctrl_v() {
         // The Alt+V case: user still holding Alt when the card is clicked.
-        let events = build_paste_events(ModsHeld { alt: true, ..Default::default() });
+        let events = build_paste_events(ModsHeld {
+            alt: true,
+            ..Default::default()
+        });
         assert_eq!(events.len(), 5);
         assert_eq!(vk(&events[0]), VK_MENU.0);
         assert!(is_up(&events[0]));
@@ -314,11 +322,17 @@ mod tests {
 
     #[test]
     fn held_win_is_released_as_the_side_that_is_down() {
-        let left = build_paste_events(ModsHeld { win_left: true, ..Default::default() });
+        let left = build_paste_events(ModsHeld {
+            win_left: true,
+            ..Default::default()
+        });
         assert_eq!(vk(&left[0]), VK_LWIN.0);
         assert!(is_up(&left[0]));
 
-        let right = build_paste_events(ModsHeld { win_right: true, ..Default::default() });
+        let right = build_paste_events(ModsHeld {
+            win_right: true,
+            ..Default::default()
+        });
         assert_eq!(vk(&right[0]), VK_RWIN.0);
         assert!(is_up(&right[0]));
     }
@@ -345,7 +359,11 @@ mod tests {
 
     #[test]
     fn win_left_wins_over_win_right() {
-        let events = build_paste_events(ModsHeld { win_left: true, win_right: true, ..Default::default() });
+        let events = build_paste_events(ModsHeld {
+            win_left: true,
+            win_right: true,
+            ..Default::default()
+        });
         assert_eq!(vk(&events[0]), VK_LWIN.0);
         assert_eq!(events.len(), 5);
     }

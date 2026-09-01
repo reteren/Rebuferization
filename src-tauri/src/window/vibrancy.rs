@@ -40,7 +40,9 @@ pub fn apply(window: &WebviewWindow) -> AppResult<()> {
 /// Solid `rgba(18,20,24,0.92)` behind the transparent WebView.
 fn set_fallback(window: &WebviewWindow) -> AppResult<()> {
     window
-        .set_background_color(Some(tauri::window::Color(BACKDROP.0, BACKDROP.1, BACKDROP.2, BACKDROP.3)))
+        .set_background_color(Some(tauri::window::Color(
+            BACKDROP.0, BACKDROP.1, BACKDROP.2, BACKDROP.3,
+        )))
         .map_err(|e| AppError::Other(format!("set_background_color: {e}")))?;
     Ok(())
 }
@@ -60,9 +62,7 @@ fn build_number() -> Option<u32> {
     unsafe {
         let ntdll = GetModuleHandleW(w!("ntdll.dll")).ok()?;
         let proc = GetProcAddress(ntdll, s!("RtlGetVersion"));
-        if proc.is_none() {
-            return None;
-        }
+        proc?;
         // FARPROC is a plain function pointer slot; the cast to the typed
         // signature is the documented way to call a resolved export.
         let f: RtlGetVersion = std::mem::transmute(proc);

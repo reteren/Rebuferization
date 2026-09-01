@@ -28,7 +28,8 @@ fn icons() -> AppResult<(tauri::image::Image<'static>, tauri::image::Image<'stat
     let mut muted = source.clone();
     for p in muted.pixels_mut() {
         // Rec. 601 luma — the standard "grey it out" pass.
-        let luma = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32).round() as u8;
+        let luma =
+            (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32).round() as u8;
         p[0] = luma;
         p[1] = luma;
         p[2] = luma;
@@ -37,8 +38,10 @@ fn icons() -> AppResult<(tauri::image::Image<'static>, tauri::image::Image<'stat
     image::DynamicImage::ImageRgba8(muted)
         .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)?;
 
-    let normal = tauri::image::Image::from_bytes(bytes).map_err(|e| AppError::Other(e.to_string()))?;
-    let muted = tauri::image::Image::from_bytes(&png).map_err(|e| AppError::Other(e.to_string()))?;
+    let normal =
+        tauri::image::Image::from_bytes(bytes).map_err(|e| AppError::Other(e.to_string()))?;
+    let muted =
+        tauri::image::Image::from_bytes(&png).map_err(|e| AppError::Other(e.to_string()))?;
     Ok((normal, muted))
 }
 
@@ -53,26 +56,25 @@ pub fn install(app: &AppHandle) -> AppResult<()> {
     // initial label and muted state come from a direct file peek.
     let behavior = crate::settings::peek_behavior();
 
-    let settings_item = tauri::menu::MenuItem::with_id(
-        app,
-        SETTINGS_ITEM_ID,
-        "Settings",
-        true,
-        None::<&str>,
-    )
-    .map_err(tauri_err)?;
+    let settings_item =
+        tauri::menu::MenuItem::with_id(app, SETTINGS_ITEM_ID, "Settings", true, None::<&str>)
+            .map_err(tauri_err)?;
     let toggle_item = tauri::menu::MenuItem::with_id(
         app,
         TOGGLE_ITEM_ID,
-        if behavior.capture_enabled { "Disable" } else { "Enable" },
+        if behavior.capture_enabled {
+            "Disable"
+        } else {
+            "Enable"
+        },
         true,
         None::<&str>,
     )
     .map_err(tauri_err)?;
     *TOGGLE_ITEM.lock() = Some(toggle_item.clone());
 
-    let menu = tauri::menu::Menu::with_items(app, &[&settings_item, &toggle_item])
-        .map_err(tauri_err)?;
+    let menu =
+        tauri::menu::Menu::with_items(app, &[&settings_item, &toggle_item]).map_err(tauri_err)?;
 
     let tray = tauri::tray::TrayIconBuilder::with_id(TRAY_ID)
         .icon(normal)

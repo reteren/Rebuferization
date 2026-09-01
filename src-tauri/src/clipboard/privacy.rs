@@ -215,10 +215,7 @@ pub fn get_foreground_process_name() -> Option<String> {
 
 /// Inspects the open clipboard for privacy flags and determines if capture should be skipped.
 /// Assumes clipboard is open on this thread.
-pub fn check_clipboard_privacy(
-    foreground_exe: Option<&str>,
-    settings: &PrivacySettings,
-) -> bool {
+pub fn check_clipboard_privacy(foreground_exe: Option<&str>, settings: &PrivacySettings) -> bool {
     let mut flags = ClipboardPrivacyFlags::default();
 
     if settings.respect_clipboard_flags {
@@ -291,7 +288,11 @@ mod tests {
         let flags_disabled = flags.clone();
         let mut settings_no_flags = settings.clone();
         settings_no_flags.respect_clipboard_flags = false;
-        assert!(!should_skip(&flags_disabled, Some("notepad.exe"), &settings_no_flags));
+        assert!(!should_skip(
+            &flags_disabled,
+            Some("notepad.exe"),
+            &settings_no_flags
+        ));
     }
 
     #[test]
@@ -324,7 +325,11 @@ mod tests {
             can_upload_to_cloud: Some(0),
         };
         // CanUploadToCloudClipboard = 0 must NOT block
-        assert!(!should_skip(&flags_cloud_zero, Some("notepad.exe"), &settings));
+        assert!(!should_skip(
+            &flags_cloud_zero,
+            Some("notepad.exe"),
+            &settings
+        ));
     }
 
     /// REVIEW.md finding 1. An unidentifiable foreground process must not be

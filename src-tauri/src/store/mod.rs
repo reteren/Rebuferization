@@ -104,32 +104,30 @@ impl Store {
         let weak_inner = Arc::downgrade(&store.inner);
         thread::Builder::new()
             .name("store-janitor".into())
-            .spawn(move || {
-                loop {
-                    for _ in 0..36000 {
-                        thread::sleep(Duration::from_millis(100));
-                        match weak_inner.upgrade() {
-                            Some(inner) => {
-                                if inner.stop_janitor.load(Ordering::Relaxed) {
-                                    return;
-                                }
+            .spawn(move || loop {
+                for _ in 0..36000 {
+                    thread::sleep(Duration::from_millis(100));
+                    match weak_inner.upgrade() {
+                        Some(inner) => {
+                            if inner.stop_janitor.load(Ordering::Relaxed) {
+                                return;
                             }
-                            None => return,
                         }
+                        None => return,
                     }
-                    if let Some(inner) = weak_inner.upgrade() {
-                        let store = Store { inner };
-                        let policy = store.retention_policy();
-                        let app = store.inner.app_handle.lock().clone();
-                        let _ = janitor::run_cleanup_with_app(
-                            app.as_ref(),
-                            &store,
-                            Some(policy.retention_days),
-                            policy.max_store_bytes,
-                        );
-                    } else {
-                        return;
-                    }
+                }
+                if let Some(inner) = weak_inner.upgrade() {
+                    let store = Store { inner };
+                    let policy = store.retention_policy();
+                    let app = store.inner.app_handle.lock().clone();
+                    let _ = janitor::run_cleanup_with_app(
+                        app.as_ref(),
+                        &store,
+                        Some(policy.retention_days),
+                        policy.max_store_bytes,
+                    );
+                } else {
+                    return;
                 }
             })
             .map_err(|e| AppError::Other(e.to_string()))?;
@@ -245,7 +243,12 @@ impl Store {
                 let rel = write_blob(&root, &fmt_hash, &fmt.bytes)?;
                 (None, Some(rel))
             };
-            format_entries.push((fmt.format, fmt_blob_path, inline_data, fmt.bytes.len() as i64));
+            format_entries.push((
+                fmt.format,
+                fmt_blob_path,
+                inline_data,
+                fmt.bytes.len() as i64,
+            ));
         }
 
         let byte_size = if let Some(ref bytes) = cap.primary {
@@ -312,13 +315,7 @@ impl Store {
             conn.execute(
                 "INSERT INTO item_formats (item_id, format, blob_path, inline_data, byte_size)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![
-                    item_id,
-                    format,
-                    fmt_blob_path,
-                    inline_data,
-                    fmt_byte_size,
-                ],
+                rusqlite::params![item_id, format, fmt_blob_path, inline_data, fmt_byte_size,],
             )?;
         }
 
@@ -326,7 +323,13 @@ impl Store {
             conn.execute(
                 "INSERT INTO item_files (item_id, path, file_name, byte_size, position)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![item_id, file.path, file.file_name, file.byte_size, pos as i64],
+                rusqlite::params![
+                    item_id,
+                    file.path,
+                    file.file_name,
+                    file.byte_size,
+                    pos as i64
+                ],
             )?;
         }
 
@@ -452,7 +455,10 @@ mod tests {
         let cap1 = Capture::text("Sample Text Content  \r\n");
         let item1 = store.insert_capture(cap1).unwrap();
         assert_eq!(item1.copy_count, 1);
-        assert_eq!(item1.preview_text.as_deref(), Some("Sample Text Content  \r\n"));
+        assert_eq!(
+            item1.preview_text.as_deref(),
+            Some("Sample Text Content  \r\n")
+        );
 
         // Second capture with different whitespace/CRLF but same normalized text
         let cap2 = Capture::text("Sample Text Content\n");

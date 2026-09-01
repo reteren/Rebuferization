@@ -222,7 +222,10 @@ pub struct RetentionPolicy {
 
 impl Default for RetentionPolicy {
     fn default() -> Self {
-        RetentionPolicy { retention_days: 30, max_store_bytes: None }
+        RetentionPolicy {
+            retention_days: 30,
+            max_store_bytes: None,
+        }
     }
 }
 

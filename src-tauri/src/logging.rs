@@ -57,11 +57,17 @@ pub fn init(log_dir: &Path) -> Option<tracing_appender::non_blocking::WorkerGuar
 /// file we did not create in a directory the user can open; deleting it would
 /// be data loss, so it is never touched.
 fn prune_old_logs(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     let mut dates: Vec<(String, String)> = Vec::new();
     for entry in entries.flatten() {
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
-        let Some(stem) = name.strip_prefix("rebuffer.log.").map(str::to_owned) else { continue };
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(stem) = name.strip_prefix("rebuffer.log.").map(str::to_owned) else {
+            continue;
+        };
         if let Some(date) = stem.strip_suffix(".tmp") {
             // Our own leftover from an interrupted rotation — cleaning it is right.
             if is_date(date) {
@@ -83,8 +89,7 @@ fn is_date(s: &str) -> bool {
     b.len() == 10
         && b[4] == b'-'
         && b[7] == b'-'
-        && b
-            .iter()
+        && b.iter()
             .enumerate()
             .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
 }

@@ -10,9 +10,7 @@ use crate::error::AppResult;
 
 const MIGRATION_0001: &str = include_str!("../../migrations/0001_init.sql");
 
-const MIGRATIONS: &[(i64, &str, &str)] = &[
-    (1, "0001_init.sql", MIGRATION_0001),
-];
+const MIGRATIONS: &[(i64, &str, &str)] = &[(1, "0001_init.sql", MIGRATION_0001)];
 
 /// Opens a SQLite database at `db_path`, applies WAL/synchronous/foreign_key PRAGMAs,
 /// and runs all pending migrations. If the database file is corrupted, it moves the corrupt file
@@ -139,9 +137,11 @@ mod tests {
         let conn = open_database(&db_path).unwrap();
 
         let version: String = conn
-            .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(version, "1");
 
@@ -155,4 +155,3 @@ mod tests {
         assert!(items_exist);
     }
 }
-

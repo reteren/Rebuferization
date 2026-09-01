@@ -16,9 +16,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
     GetWindowLongPtrW, PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, TranslateMessage,
-    UnregisterClassW, CREATESTRUCTW, GWLP_USERDATA, MSG, WINDOW_EX_STYLE,
+    UnregisterClassW, CREATESTRUCTW, GWLP_USERDATA, HWND_MESSAGE, MSG, WINDOW_EX_STYLE,
     WINDOW_STYLE, WM_CLIPBOARDUPDATE, WM_CREATE, WM_DESTROY, WM_NCDESTROY, WNDCLASSEXW,
-    HWND_MESSAGE,
 };
 
 use crate::clipboard::decode;

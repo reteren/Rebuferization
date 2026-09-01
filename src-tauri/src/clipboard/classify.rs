@@ -84,14 +84,19 @@ fn is_color(s: &str) -> bool {
     // Hex colors: #RGB, #RGBA, #RRGGBB, #RRGGBBAA
     if let Some(hex) = s.strip_prefix('#') {
         let len = hex.len();
-        if (len == 3 || len == 4 || len == 6 || len == 8) && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        if (len == 3 || len == 4 || len == 6 || len == 8)
+            && hex.chars().all(|c| c.is_ascii_hexdigit())
+        {
             return true;
         }
     }
 
     // Functional colors: rgb(...), rgba(...), hsl(...), hsla(...)
     let lower = s.to_ascii_lowercase();
-    if (lower.starts_with("rgb(") || lower.starts_with("rgba(") || lower.starts_with("hsl(") || lower.starts_with("hsla("))
+    if (lower.starts_with("rgb(")
+        || lower.starts_with("rgba(")
+        || lower.starts_with("hsl(")
+        || lower.starts_with("hsla("))
         && lower.ends_with(')')
     {
         let Some(start) = lower.find('(') else {
@@ -132,25 +137,24 @@ fn is_code(raw: &str, trimmed: &str) -> bool {
     }
 
     // Check if valid JSON object or array
-    if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+        && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
     {
-        if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
-            return true;
-        }
+        return true;
     }
 
     // Check if XML / HTML snippet
-    if trimmed.starts_with('<') && trimmed.ends_with('>') {
-        if trimmed.starts_with("<?xml")
+    if trimmed.starts_with('<')
+        && trimmed.ends_with('>')
+        && (trimmed.starts_with("<?xml")
             || trimmed.starts_with("<!DOCTYPE")
             || trimmed.starts_with("<!--")
             || trimmed.starts_with("<html")
             || trimmed.starts_with("<svg")
-            || looks_like_html_xml_tag(trimmed)
-        {
-            return true;
-        }
+            || looks_like_html_xml_tag(trimmed))
+    {
+        return true;
     }
 
     false
@@ -197,10 +201,12 @@ pub fn is_animated_image(bytes: &[u8]) -> bool {
     }
 
     // WebP check (RIFF....WEBP with ANIM chunk)
-    if bytes.starts_with(b"RIFF") && bytes.len() >= 16 && &bytes[8..12] == b"WEBP" {
-        if bytes.windows(4).any(|w| w == b"ANIM") {
-            return true;
-        }
+    if bytes.starts_with(b"RIFF")
+        && bytes.len() >= 16
+        && &bytes[8..12] == b"WEBP"
+        && bytes.windows(4).any(|w| w == b"ANIM")
+    {
+        return true;
     }
 
     false
@@ -216,7 +222,18 @@ pub fn is_video_file(path: &str) -> bool {
 
     matches!(
         ext.as_str(),
-        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" | "3gp" | "ts" | "mpg" | "mpeg"
+        "mp4"
+            | "mkv"
+            | "avi"
+            | "mov"
+            | "wmv"
+            | "flv"
+            | "webm"
+            | "m4v"
+            | "3gp"
+            | "ts"
+            | "mpg"
+            | "mpeg"
     )
 }
 
@@ -227,14 +244,29 @@ mod tests {
     #[test]
     fn test_classify_links() {
         assert_eq!(classify_text("https://example.com"), SubKind::Link);
-        assert_eq!(classify_text("http://localhost:3000/api/items?id=12#top"), SubKind::Link);
-        assert_eq!(classify_text("https://github.com/reteren/rebuffer"), SubKind::Link);
+        assert_eq!(
+            classify_text("http://localhost:3000/api/items?id=12#top"),
+            SubKind::Link
+        );
+        assert_eq!(
+            classify_text("https://github.com/reteren/rebuffer"),
+            SubKind::Link
+        );
         assert_eq!(classify_text("mailto:user@example.com"), SubKind::Link);
-        assert_eq!(classify_text("file:///C:/Users/test/file.txt"), SubKind::Link);
+        assert_eq!(
+            classify_text("file:///C:/Users/test/file.txt"),
+            SubKind::Link
+        );
 
         // Not links
-        assert_eq!(classify_text("This is not a link: https://example.com"), SubKind::Plain);
-        assert_eq!(classify_text("https://example.com and some text"), SubKind::Plain);
+        assert_eq!(
+            classify_text("This is not a link: https://example.com"),
+            SubKind::Plain
+        );
+        assert_eq!(
+            classify_text("https://example.com and some text"),
+            SubKind::Plain
+        );
         assert_eq!(classify_text("http://"), SubKind::Plain);
     }
 

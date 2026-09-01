@@ -15,7 +15,9 @@ use image::RgbaImage;
 use once_cell::sync::Lazy;
 use windows::core::w;
 use windows::Win32::Foundation::HGLOBAL;
-use windows::Win32::System::DataExchange::{GetClipboardData, IsClipboardFormatAvailable, RegisterClipboardFormatW};
+use windows::Win32::System::DataExchange::{
+    GetClipboardData, IsClipboardFormatAvailable, RegisterClipboardFormatW,
+};
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
@@ -128,9 +130,7 @@ fn decode_hdrop(max_bytes: u64) -> AppResult<Option<Capture>> {
                 .unwrap_or("")
                 .to_string();
 
-            let byte_size = std::fs::metadata(&path_str)
-                .map(|m| m.len() as i64)
-                .ok();
+            let byte_size = std::fs::metadata(&path_str).map(|m| m.len() as i64).ok();
 
             if let Some(size) = byte_size {
                 total_bytes = total_bytes.saturating_add(size as u64);
@@ -329,7 +329,9 @@ fn decode_image(max_bytes: u64) -> AppResult<Option<Capture>> {
             if estimated_pixel_bytes > max_bytes || (total_size as u64) > max_bytes {
                 // Sound: GlobalUnlock releases lock on hglobal before returning error.
                 let _ = GlobalUnlock(hglobal);
-                return Err(AppError::TooLarge(estimated_pixel_bytes.max(total_size as u64)));
+                return Err(AppError::TooLarge(
+                    estimated_pixel_bytes.max(total_size as u64),
+                ));
             }
 
             let dib_bytes = slice.to_vec();
@@ -554,7 +556,9 @@ pub fn rgba_to_png(img: &RgbaImage) -> AppResult<Vec<u8>> {
 /// - 8-bit, 4-bit, 1-bit palette indexed bitmaps
 pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
     if dib.len() < 40 {
-        return Err(AppError::Other("DIB buffer is too small for BITMAPINFOHEADER".into()));
+        return Err(AppError::Other(
+            "DIB buffer is too small for BITMAPINFOHEADER".into(),
+        ));
     }
 
     let header_size = match read_u32_le(&dib[0..4]) {
@@ -592,7 +596,9 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
     let mut data_offset = header_size;
 
     // Bitfield masks
-    if compression == 3 /* BI_BITFIELDS */ || compression == 6 /* BI_ALPHABITFIELDS */ {
+    if compression == 3 /* BI_BITFIELDS */ || compression == 6
+    /* BI_ALPHABITFIELDS */
+    {
         if header_size == 40 {
             if dib.len() < 52 {
                 return Err(AppError::Other("Truncated DIB bitfields".into()));
@@ -607,7 +613,9 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
                 mask_a = !(mask_r | mask_g | mask_b);
                 data_offset = 52;
             }
-        } else if header_size >= 108 /* BITMAPV4HEADER or BITMAPV5HEADER */ {
+        } else if header_size >= 108
+        /* BITMAPV4HEADER or BITMAPV5HEADER */
+        {
             if dib.len() < 56 {
                 return Err(AppError::Other("Truncated DIB V4/V5 header".into()));
             }
@@ -670,11 +678,19 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
     // Protect against OOM panic from malicious or corrupt dimensions
     let total_pixels = match (width as u64).checked_mul(height as u64) {
         Some(px) => px,
-        None => return Err(AppError::Other("DIB dimensions overflow pixel count".into())),
+        None => {
+            return Err(AppError::Other(
+                "DIB dimensions overflow pixel count".into(),
+            ))
+        }
     };
     let total_rgba_bytes = match total_pixels.checked_mul(4) {
         Some(bytes) => bytes,
-        None => return Err(AppError::Other("DIB dimensions overflow RGBA buffer size".into())),
+        None => {
+            return Err(AppError::Other(
+                "DIB dimensions overflow RGBA buffer size".into(),
+            ))
+        }
     };
     if total_rgba_bytes > 256 * 1024 * 1024 {
         return Err(AppError::TooLarge(total_rgba_bytes));
@@ -693,7 +709,11 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
 
             if a_bits > 0 {
                 for y in 0..height {
-                    let src_y = if is_top_down { y as usize } else { (height - 1 - y) as usize };
+                    let src_y = if is_top_down {
+                        y as usize
+                    } else {
+                        (height - 1 - y) as usize
+                    };
                     let row_start = match src_y.checked_mul(row_stride) {
                         Some(s) => s,
                         None => continue,
@@ -721,7 +741,11 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
 
             // Decode pixels
             for y in 0..height {
-                let src_y = if is_top_down { y as usize } else { (height - 1 - y) as usize };
+                let src_y = if is_top_down {
+                    y as usize
+                } else {
+                    (height - 1 - y) as usize
+                };
                 let row_start = match src_y.checked_mul(row_stride) {
                     Some(s) => s,
                     None => continue,
@@ -751,7 +775,11 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
         }
         24 => {
             for y in 0..height {
-                let src_y = if is_top_down { y as usize } else { (height - 1 - y) as usize };
+                let src_y = if is_top_down {
+                    y as usize
+                } else {
+                    (height - 1 - y) as usize
+                };
                 let row_start = match src_y.checked_mul(row_stride) {
                     Some(s) => s,
                     None => continue,
@@ -777,7 +805,11 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
             let (b_shift, b_bits) = mask_shift_and_bits(mask_b);
 
             for y in 0..height {
-                let src_y = if is_top_down { y as usize } else { (height - 1 - y) as usize };
+                let src_y = if is_top_down {
+                    y as usize
+                } else {
+                    (height - 1 - y) as usize
+                };
                 let row_start = match src_y.checked_mul(row_stride) {
                     Some(s) => s,
                     None => continue,
@@ -803,7 +835,11 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
                 return Err(AppError::Other("Missing palette for 8-bit DIB".into()));
             };
             for y in 0..height {
-                let src_y = if is_top_down { y as usize } else { (height - 1 - y) as usize };
+                let src_y = if is_top_down {
+                    y as usize
+                } else {
+                    (height - 1 - y) as usize
+                };
                 let row_start = match src_y.checked_mul(row_stride) {
                     Some(s) => s,
                     None => continue,
@@ -832,7 +868,11 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
                 return Err(AppError::Other("Missing palette for 4-bit DIB".into()));
             };
             for y in 0..height {
-                let src_y = if is_top_down { y as usize } else { (height - 1 - y) as usize };
+                let src_y = if is_top_down {
+                    y as usize
+                } else {
+                    (height - 1 - y) as usize
+                };
                 let row_start = match src_y.checked_mul(row_stride) {
                     Some(s) => s,
                     None => continue,
@@ -863,7 +903,11 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
                 return Err(AppError::Other("Missing palette for 1-bit DIB".into()));
             };
             for y in 0..height {
-                let src_y = if is_top_down { y as usize } else { (height - 1 - y) as usize };
+                let src_y = if is_top_down {
+                    y as usize
+                } else {
+                    (height - 1 - y) as usize
+                };
                 let row_start = match src_y.checked_mul(row_stride) {
                     Some(s) => s,
                     None => continue,
@@ -885,7 +929,9 @@ pub fn decode_dib_to_rgba(dib: &[u8]) -> AppResult<RgbaImage> {
             }
         }
         _ => {
-            return Err(AppError::Other(format!("Unsupported DIB bit count: {bit_count}")));
+            return Err(AppError::Other(format!(
+                "Unsupported DIB bit count: {bit_count}"
+            )));
         }
     }
 

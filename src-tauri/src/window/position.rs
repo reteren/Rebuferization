@@ -54,8 +54,16 @@ pub fn place_popup(window: &WebviewWindow, ws: &WindowSettings) -> AppResult<()>
     // stays in `show_popup`.
     // FFI: hwnd/x/y/w/h are all derived from live Win32 state in this call.
     unsafe {
-        SetWindowPos(hwnd, None, x, y, w as i32, h as i32, SWP_NOZORDER | SWP_NOACTIVATE)
-            .map_err(|e| AppError::Win(format!("SetWindowPos: {e}")))?;
+        SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            w as i32,
+            h as i32,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+        .map_err(|e| AppError::Win(format!("SetWindowPos: {e}")))?;
     }
     Ok(())
 }
@@ -84,8 +92,16 @@ pub fn center_on_cursor_monitor(window: &WebviewWindow) -> AppResult<()> {
 
     // FFI: hwnd is live and all coordinates are freshly computed physical px.
     unsafe {
-        SetWindowPos(hwnd, None, x, y, w as i32, h as i32, SWP_NOZORDER | SWP_NOACTIVATE)
-            .map_err(|e| AppError::Win(format!("SetWindowPos: {e}")))?;
+        SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            w as i32,
+            h as i32,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+        .map_err(|e| AppError::Win(format!("SetWindowPos: {e}")))?;
     }
     Ok(())
 }
@@ -180,7 +196,12 @@ mod tests {
     use super::*;
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
-        RECT { left, top, right, bottom }
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        }
     }
 
     #[test]

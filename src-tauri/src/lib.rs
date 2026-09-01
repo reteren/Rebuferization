@@ -141,8 +141,14 @@ pub fn run() {
             // this before the open would have widened the scope to the path
             // that failed rather than the one actually in use — every
             // thumbnail would then silently fail to load.
-            if let Err(e) = handle.asset_protocol_scope().allow_directory(&store_root, true) {
-                tracing::warn!("could not grant asset access to {}: {e}", store_root.display());
+            if let Err(e) = handle
+                .asset_protocol_scope()
+                .allow_directory(&store_root, true)
+            {
+                tracing::warn!(
+                    "could not grant asset access to {}: {e}",
+                    store_root.display()
+                );
             }
 
             // The store deliberately does not read settings.json, so without
@@ -208,7 +214,13 @@ pub fn run() {
 
             tray::install(&handle)?;
 
-            app.manage(AppState { _log_guard: log_guard, store, settings, clipboard, hotkeys });
+            app.manage(AppState {
+                _log_guard: log_guard,
+                store,
+                settings,
+                clipboard,
+                hotkeys,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

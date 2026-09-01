@@ -30,7 +30,11 @@ fn test_store_stress_10000_items() {
                 2 => "file",
                 _ => "text",
             };
-            let sub_kind = if i % 5 == 0 { Some("link") } else { Some("plain") };
+            let sub_kind = if i % 5 == 0 {
+                Some("link")
+            } else {
+                Some("plain")
+            };
             let ext = match i % 4 {
                 0 => Some("TXT"),
                 1 => Some("PNG"),
@@ -67,13 +71,17 @@ fn test_store_stress_10000_items() {
 
     // 2. Measure list page of 200 items
     let list_start = Instant::now();
-    let page = store.list(&Filter::default(), Sort::Newest, 0, 200).unwrap();
+    let page = store
+        .list(&Filter::default(), Sort::Newest, 0, 200)
+        .unwrap();
     let list_duration = list_start.elapsed();
     assert_eq!(page.len(), 200);
 
     // 3. Measure FTS search across 10,000 items
     let search_start = Instant::now();
-    let search_results = store.search("keyword_search_9950", &Filter::default(), 200).unwrap();
+    let search_results = store
+        .search("keyword_search_9950", &Filter::default(), 200)
+        .unwrap();
     let search_duration = search_start.elapsed();
     assert!(!search_results.is_empty());
 
@@ -92,9 +100,21 @@ fn test_store_stress_10000_items() {
     println!("\n| Operation | Target | Measured | Notes |");
     println!("|---|---|---|---|");
     println!("| `Store::open` (sweep on 10k items) | < 500 ms | {:.2?} | Cold startup + integrity sweep |", open_duration);
-    println!("| `list` (page of 200 items) | < 10 ms | {:.2?} | Sort: Newest, batch file names |", list_duration);
-    println!("| `search` (FTS5 over 10k items) | < 20 ms | {:.2?} | Query: 'keyword_search_9950' |", search_duration);
-    println!("| `ext_facets` | < 15 ms | {:.2?} | Aggregation over 10k extensions |", facets_duration);
-    println!("| `tab_counts` | < 10 ms | {:.2?} | Single-pass aggregate across 10k items |", tab_counts_duration);
+    println!(
+        "| `list` (page of 200 items) | < 10 ms | {:.2?} | Sort: Newest, batch file names |",
+        list_duration
+    );
+    println!(
+        "| `search` (FTS5 over 10k items) | < 20 ms | {:.2?} | Query: 'keyword_search_9950' |",
+        search_duration
+    );
+    println!(
+        "| `ext_facets` | < 15 ms | {:.2?} | Aggregation over 10k extensions |",
+        facets_duration
+    );
+    println!(
+        "| `tab_counts` | < 10 ms | {:.2?} | Single-pass aggregate across 10k items |",
+        tab_counts_duration
+    );
     println!("\n=================================================");
 }

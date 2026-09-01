@@ -112,14 +112,24 @@ pub fn paste_to_previous_window(
 }
 
 #[tauri::command]
-pub fn set_pinned(app: AppHandle, state: State<'_, AppState>, ids: Vec<i64>, pinned: bool) -> AppResult<()> {
+pub fn set_pinned(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+    pinned: bool,
+) -> AppResult<()> {
     state.store.set_pinned(&ids, pinned)?;
     let _ = app.emit(events::ITEM_UPDATED, &ids);
     Ok(())
 }
 
 #[tauri::command]
-pub fn rename_item(app: AppHandle, state: State<'_, AppState>, id: i64, title: String) -> AppResult<()> {
+pub fn rename_item(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    title: String,
+) -> AppResult<()> {
     state.store.rename(id, &title)?;
     let _ = app.emit(events::ITEM_UPDATED, vec![id]);
     Ok(())
@@ -133,7 +143,11 @@ pub fn delete_items(app: AppHandle, state: State<'_, AppState>, ids: Vec<i64>) -
 }
 
 #[tauri::command]
-pub fn add_files(app: AppHandle, state: State<'_, AppState>, paths: Vec<String>) -> AppResult<Vec<ItemDto>> {
+pub fn add_files(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> AppResult<Vec<ItemDto>> {
     let items = state.store.add_references(&paths)?;
     for item in &items {
         let _ = app.emit(events::ITEM_ADDED, item);
@@ -205,7 +219,11 @@ pub fn update_settings(
     // validating after leaves settings.json and the settings UI showing a
     // binding the runtime is not actually using, which is worse than a
     // rejected change: the user sees their new hotkey and it does nothing.
-    let proposed_chord = match patch.get("hotkey").and_then(|h| h.get("binding")).and_then(|b| b.as_str()) {
+    let proposed_chord = match patch
+        .get("hotkey")
+        .and_then(|h| h.get("binding"))
+        .and_then(|b| b.as_str())
+    {
         Some(binding) if binding != before.hotkey.binding => {
             Some(crate::hotkey::Chord::parse(binding)?)
         }
@@ -241,10 +259,12 @@ pub fn update_settings(
     if next.storage.retention_days != before.storage.retention_days
         || next.storage.max_store_bytes != before.storage.max_store_bytes
     {
-        state.store.set_retention_policy(crate::model::RetentionPolicy {
-            retention_days: next.storage.retention_days,
-            max_store_bytes: next.storage.max_store_bytes.map(|b| b as i64),
-        });
+        state
+            .store
+            .set_retention_policy(crate::model::RetentionPolicy {
+                retention_days: next.storage.retention_days,
+                max_store_bytes: next.storage.max_store_bytes.map(|b| b as i64),
+            });
     }
 
     let _ = app.emit(events::SETTINGS_CHANGED, &next);
@@ -278,7 +298,11 @@ pub fn import_data(
 }
 
 #[tauri::command]
-pub fn set_capture_enabled(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> AppResult<()> {
+pub fn set_capture_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> AppResult<()> {
     state.clipboard.set_enabled(enabled);
     crate::tray::set_capture_enabled(&app, enabled)?;
     Ok(())

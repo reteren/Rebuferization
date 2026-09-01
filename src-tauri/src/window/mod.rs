@@ -145,9 +145,7 @@ fn persist_resized_size(app: AppHandle) {
                 "fixed": { "width": width, "height": height }
             }
         })) {
-            Ok(_) => tracing::info!(
-                "persisted resized popup: {width}x{height} (sizeMode=fixed)"
-            ),
+            Ok(_) => tracing::info!("persisted resized popup: {width}x{height} (sizeMode=fixed)"),
             Err(e) => tracing::warn!("persist_resized_size: settings patch failed: {e}"),
         }
     });
@@ -294,9 +292,8 @@ pub fn apply_backdrop(window: &WebviewWindow) -> AppResult<()> {
                     // dismissal. The window subclass tracks both the
                     // non-client button-down and the modal loop, and while
                     // either is active the popup stays open.
-                    let interacting =
-                        IN_MOVE_OR_RESIZE.load(Ordering::SeqCst)
-                            || NC_BUTTON_DOWN.load(Ordering::SeqCst);
+                    let interacting = IN_MOVE_OR_RESIZE.load(Ordering::SeqCst)
+                        || NC_BUTTON_DOWN.load(Ordering::SeqCst);
                     if !interacting {
                         let _ = hide_popup_dismissed(&app);
                     }

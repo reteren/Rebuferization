@@ -21,23 +21,23 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
-    MOD_SHIFT, MOD_WIN, VK_CAPITAL, VK_DELETE, VK_ESCAPE, VK_F4, VK_HOME, VK_END, VK_INSERT,
-    VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP, VK_DOWN, VK_BACK, VK_RETURN,
-    VK_SNAPSHOT, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
-    VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_NUMLOCK, VK_ADD, VK_SUBTRACT,
-    VK_MULTIPLY, VK_DIVIDE, VK_DECIMAL, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4,
-    VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9,
+    MOD_SHIFT, MOD_WIN, VK_ADD, VK_BACK, VK_CAPITAL, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN,
+    VK_END, VK_ESCAPE, VK_F4, VK_HOME, VK_INSERT, VK_LEFT, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK,
+    VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7,
+    VK_NUMPAD8, VK_NUMPAD9, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
+    VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT,
+    VK_SNAPSHOT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW, SendMessageW,
-    TranslateMessage, WNDCLASSW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_HOTKEY,
+    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_HOTKEY, WNDCLASSW,
 };
-use windows::core::{w, PCWSTR};
 
 use crate::error::{AppError, AppResult};
 
@@ -100,12 +100,20 @@ pub struct Chord {
 impl Chord {
     /// Parses `"Alt+V"`, `"Ctrl+Shift+C"`, `"Win+V"`. Case-insensitive.
     pub fn parse(s: &str) -> AppResult<Chord> {
-        let mut chord = Chord { ctrl: false, alt: false, shift: false, win: false, vk: 0 };
+        let mut chord = Chord {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            win: false,
+            vk: 0,
+        };
         let mut key_seen = false;
         for part in s.split('+') {
             let part = part.trim();
             if part.is_empty() {
-                return Err(AppError::Other(format!("invalid hotkey \"{s}\": empty part")));
+                return Err(AppError::Other(format!(
+                    "invalid hotkey \"{s}\": empty part"
+                )));
             }
             match part.to_ascii_lowercase().as_str() {
                 "ctrl" | "control" => chord.ctrl = true,
@@ -325,7 +333,13 @@ pub fn active_chord() -> Chord {
     MANAGER
         .get()
         .map(|shared| shared.current_binding().0)
-        .unwrap_or(Chord { ctrl: false, alt: false, shift: false, win: false, vk: 0 })
+        .unwrap_or(Chord {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            win: false,
+            vk: 0,
+        })
 }
 
 /// Holds whichever registration path is active. Dropping it unregisters.
@@ -383,7 +397,11 @@ impl HotkeyManager {
             .map_err(|_| AppError::Other("hotkey window thread did not start".into()))?;
         status.map_err(AppError::Other)?;
 
-        Ok(HotkeyManager { shared, window_thread: Some(window_thread), hook_thread: Mutex::new(None) })
+        Ok(HotkeyManager {
+            shared,
+            window_thread: Some(window_thread),
+            hook_thread: Mutex::new(None),
+        })
     }
 
     /// Swaps the binding at runtime, as the settings window does. `aggressive`
@@ -459,7 +477,12 @@ fn apply_new(
     // reply says whether the chord was actually accepted.
     // FFI: hwnd is the live hidden window; wparam/lparam are plain words.
     let registered = unsafe {
-        SendMessageW(hwnd, WM_APP_REBIND, Some(WPARAM(usize::from(aggressive))), None)
+        SendMessageW(
+            hwnd,
+            WM_APP_REBIND,
+            Some(WPARAM(usize::from(aggressive))),
+            None,
+        )
     };
     if !aggressive && registered.0 == 0 {
         return Err(AppError::Other(

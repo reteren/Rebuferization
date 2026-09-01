@@ -180,7 +180,11 @@ fn decide_hook(armed: &mut bool, vk_is_chord: bool, is_up: bool, mods_match: boo
         // keyup always corresponds to a keydown we swallowed, and the target
         // app must not see a stray keyup. A mismatched keyup passes through;
         // re-arming is what matters.
-        return if mods_match { HookDecision::Swallow } else { HookDecision::Pass };
+        return if mods_match {
+            HookDecision::Swallow
+        } else {
+            HookDecision::Pass
+        };
     }
     if !mods_match {
         return HookDecision::Pass;
@@ -210,6 +214,15 @@ fn mods_match(shared: &Shared) -> bool {
         && win == shared.win.load(Ordering::Relaxed)
 }
 
+fn call_next(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let Some(shared) = MANAGER.get() else {
+        return LRESULT(0);
+    };
+    let hook = HHOOK(shared.hook.load(Ordering::Relaxed) as *mut c_void);
+    // FFI: forwarding our own hook handle is the documented pattern.
+    unsafe { CallNextHookEx(Some(hook), code, wparam, lparam) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,31 +236,46 @@ mod tests {
         let mut armed = true;
         assert_eq!(pass(&mut armed), HookDecision::Pass);
         assert!(armed, "non-chord keys must not touch the armed state");
-        assert_eq!(decide_hook(&mut armed, false, true, true), HookDecision::Pass);
+        assert_eq!(
+            decide_hook(&mut armed, false, true, true),
+            HookDecision::Pass
+        );
         assert!(armed);
     }
 
     #[test]
     fn arming_keydown_fires_once() {
         let mut armed = true;
-        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::SwallowAndFire);
+        assert_eq!(
+            decide_hook(&mut armed, true, false, true),
+            HookDecision::SwallowAndFire
+        );
         assert!(!armed);
         // Auto-repeat while the key is held: swallowed, never fires again.
-        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::Swallow);
+        assert_eq!(
+            decide_hook(&mut armed, true, false, true),
+            HookDecision::Swallow
+        );
         assert!(!armed);
     }
 
     #[test]
     fn mismatched_modifiers_pass_through() {
         let mut armed = true;
-        assert_eq!(decide_hook(&mut armed, true, false, false), HookDecision::Pass);
+        assert_eq!(
+            decide_hook(&mut armed, true, false, false),
+            HookDecision::Pass
+        );
         assert!(armed, "a passed-through keydown must not disarm the hook");
     }
 
     #[test]
     fn matching_keyup_swallows_and_rearms() {
         let mut armed = false;
-        assert_eq!(decide_hook(&mut armed, true, true, true), HookDecision::Swallow);
+        assert_eq!(
+            decide_hook(&mut armed, true, true, true),
+            HookDecision::Swallow
+        );
         assert!(armed, "a keyup must re-arm the hook");
     }
 
@@ -257,7 +285,10 @@ mod tests {
         // V keyup arrives with the modifiers no longer matching, and the hook
         // must still re-arm — otherwise the next Alt+V is swallowed silently.
         let mut armed = false;
-        assert_eq!(decide_hook(&mut armed, true, true, false), HookDecision::Pass);
+        assert_eq!(
+            decide_hook(&mut armed, true, true, false),
+            HookDecision::Pass
+        );
         assert!(armed, "the rolled-press keyup must re-arm the hook");
     }
 
@@ -265,24 +296,33 @@ mod tests {
     fn full_press_cycle() {
         let mut armed = true;
         // Alt+V, normal release order: fire, swallow repeat, swallow keyup, re-arm.
-        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::SwallowAndFire);
-        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::Swallow);
-        assert_eq!(decide_hook(&mut armed, true, true, true), HookDecision::Swallow);
+        assert_eq!(
+            decide_hook(&mut armed, true, false, true),
+            HookDecision::SwallowAndFire
+        );
+        assert_eq!(
+            decide_hook(&mut armed, true, false, true),
+            HookDecision::Swallow
+        );
+        assert_eq!(
+            decide_hook(&mut armed, true, true, true),
+            HookDecision::Swallow
+        );
         assert!(armed);
         // Rolled release order: fire, keyup with mismatched mods still re-arms.
-        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::SwallowAndFire);
+        assert_eq!(
+            decide_hook(&mut armed, true, false, true),
+            HookDecision::SwallowAndFire
+        );
         assert!(!armed);
-        assert_eq!(decide_hook(&mut armed, true, true, false), HookDecision::Pass);
+        assert_eq!(
+            decide_hook(&mut armed, true, true, false),
+            HookDecision::Pass
+        );
         assert!(armed, "the next press must fire again");
-        assert_eq!(decide_hook(&mut armed, true, false, true), HookDecision::SwallowAndFire);
+        assert_eq!(
+            decide_hook(&mut armed, true, false, true),
+            HookDecision::SwallowAndFire
+        );
     }
-}
-
-fn call_next(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let Some(shared) = MANAGER.get() else {
-        return LRESULT(0);
-    };
-    let hook = HHOOK(shared.hook.load(Ordering::Relaxed) as *mut c_void);
-    // FFI: forwarding our own hook handle is the documented pattern.
-    unsafe { CallNextHookEx(Some(hook), code, wparam, lparam) }
 }

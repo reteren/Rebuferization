@@ -69,9 +69,9 @@ pub fn write_blob(root: &Path, hash: &str, data: &[u8]) -> AppResult<String> {
         return Ok(rel);
     }
 
-    let parent = target_path.parent().ok_or_else(|| {
-        AppError::Other("Invalid blob target directory".into())
-    })?;
+    let parent = target_path
+        .parent()
+        .ok_or_else(|| AppError::Other("Invalid blob target directory".into()))?;
     std::fs::create_dir_all(parent)?;
 
     let temp_name = format!(
@@ -181,11 +181,10 @@ pub fn delete_blob_if_unreferenced(
     blob_path: Option<&str>,
     thumb_path: Option<&str>,
 ) -> AppResult<bool> {
-    let count_items: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM items WHERE hash = ?1",
-        [hash],
-        |r| r.get(0),
-    )?;
+    let count_items: i64 =
+        conn.query_row("SELECT COUNT(*) FROM items WHERE hash = ?1", [hash], |r| {
+            r.get(0)
+        })?;
 
     let count_formats: i64 = if let Some(rel) = blob_path {
         conn.query_row(
@@ -289,4 +288,3 @@ mod tests {
         assert!(decoded.width() <= 512 && decoded.height() <= 512);
     }
 }
-

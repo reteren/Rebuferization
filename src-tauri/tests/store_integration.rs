@@ -27,7 +27,10 @@ fn test_roundtrip_all_capture_kinds() {
 
     assert_eq!(text_item.kind, Kind::Text);
     assert_eq!(text_item.sub_kind, Some(SubKind::Plain));
-    assert_eq!(text_item.preview_text.as_deref(), Some("Plain text body content for test"));
+    assert_eq!(
+        text_item.preview_text.as_deref(),
+        Some("Plain text body content for test")
+    );
     assert_eq!(text_item.source_app.as_deref(), Some("notepad.exe"));
 
     // 2. Rich text capture with extra formats
@@ -156,7 +159,10 @@ fn test_roundtrip_all_capture_kinds() {
 
     assert!(ref_item.is_reference);
     assert!(!ref_item.missing);
-    assert_eq!(ref_item.ref_path.as_deref(), Some(ref_on_disk.to_str().unwrap()));
+    assert_eq!(
+        ref_item.ref_path.as_deref(),
+        Some(ref_on_disk.to_str().unwrap())
+    );
     assert_eq!(store.blob_path(ref_item.id).unwrap(), ref_on_disk);
 
     // Verify list and search return them all accurately
@@ -174,27 +180,42 @@ fn test_durability_and_fts_reopen() {
     {
         let store = Store::open(dir.path()).unwrap();
         for i in 0..50 {
-            let cap = Capture::text(format!("Durability entry number {} with unique token_{}", i, i));
+            let cap = Capture::text(format!(
+                "Durability entry number {} with unique token_{}",
+                i, i
+            ));
             store.insert_capture(cap).unwrap();
         }
-        let list = store.list(&Filter::default(), Sort::Newest, 0, 100).unwrap();
+        let list = store
+            .list(&Filter::default(), Sort::Newest, 0, 100)
+            .unwrap();
         assert_eq!(list.len(), 50);
     }
 
     // Reopen from disk
     {
         let store = Store::open(dir.path()).unwrap();
-        let list = store.list(&Filter::default(), Sort::Newest, 0, 100).unwrap();
+        let list = store
+            .list(&Filter::default(), Sort::Newest, 0, 100)
+            .unwrap();
         assert_eq!(list.len(), 50);
 
         // FTS verification across the reopened database
         let search_23 = store.search("token_23", &Filter::default(), 10).unwrap();
         assert_eq!(search_23.len(), 1);
-        assert!(search_23[0].preview_text.as_ref().unwrap().contains("token_23"));
+        assert!(search_23[0]
+            .preview_text
+            .as_ref()
+            .unwrap()
+            .contains("token_23"));
 
         let search_49 = store.search("token_49", &Filter::default(), 10).unwrap();
         assert_eq!(search_49.len(), 1);
-        assert!(search_49[0].preview_text.as_ref().unwrap().contains("token_49"));
+        assert!(search_49[0]
+            .preview_text
+            .as_ref()
+            .unwrap()
+            .contains("token_49"));
     }
 }
 
@@ -288,7 +309,11 @@ fn test_blob_refcounting_and_directory_cleanup() {
     // Let's test two items directly with same hash or delete
     let count: i64 = store
         .conn()
-        .query_row("SELECT COUNT(*) FROM items WHERE id = ?1", [item1.id], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM items WHERE id = ?1",
+            [item1.id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(count, 0);
 
@@ -373,7 +398,13 @@ fn test_janitor_age_and_size_cap() {
     // Clear history test (Data reset)
     let reset_res = store.clear_history(true).unwrap();
     assert_eq!(reset_res.removed_items, 3);
-    assert_eq!(store.list(&Filter::default(), Sort::Newest, 0, 10).unwrap().len(), 0);
+    assert_eq!(
+        store
+            .list(&Filter::default(), Sort::Newest, 0, 10)
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
 #[test]
@@ -384,7 +415,9 @@ fn test_startup_integrity_sweep() {
     let item2_id;
     {
         let store = Store::open(dir.path()).unwrap();
-        let item1 = store.insert_capture(Capture::text("Corrupt item 1")).unwrap();
+        let item1 = store
+            .insert_capture(Capture::text("Corrupt item 1"))
+            .unwrap();
         let item2 = store.insert_capture(Capture::text("Valid item 2")).unwrap();
         item1_id = item1.id;
         item2_id = item2.id;
@@ -396,7 +429,8 @@ fn test_startup_integrity_sweep() {
         // 2. Create orphan blob file
         let orphan_dir = dir.path().join("blobs").join("99").join("88");
         std::fs::create_dir_all(&orphan_dir).unwrap();
-        let orphan_file = orphan_dir.join("9988776655443322110099887766554433221100998877665544332211001122");
+        let orphan_file =
+            orphan_dir.join("9988776655443322110099887766554433221100998877665544332211001122");
         std::fs::write(&orphan_file, b"orphan bytes").unwrap();
 
         // 3. Create stray temp file
@@ -437,7 +471,9 @@ fn test_corruption_recovery_on_garbage_database() {
     {
         let store = Store::open(dir.path()).unwrap();
         store.insert_capture(Capture::text("Initial data")).unwrap();
-        let _ = store.conn().execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        let _ = store
+            .conn()
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
     }
 
     // Overwrite database and wal with total garbage
@@ -445,8 +481,13 @@ fn test_corruption_recovery_on_garbage_database() {
     std::fs::write(&db_path, b"CORRUPTED_GARBAGE_BYTES_NOT_VALID_SQLITE_3").unwrap();
     // Reopening must recover cleanly by recreating a clean database
     let store = Store::open(dir.path()).unwrap();
-    let new_item = store.insert_capture(Capture::text("Recovered new entry")).unwrap();
-    assert_eq!(new_item.preview_text.as_deref(), Some("Recovered new entry"));
+    let new_item = store
+        .insert_capture(Capture::text("Recovered new entry"))
+        .unwrap();
+    assert_eq!(
+        new_item.preview_text.as_deref(),
+        Some("Recovered new entry")
+    );
 
     let list = store.list(&Filter::default(), Sort::Newest, 0, 10).unwrap();
     assert_eq!(list.len(), 1);
@@ -461,7 +502,9 @@ fn test_regression_finding_3_deadlock_switch_root_concurrent_queries() {
 
     // Populate some data
     for i in 0..20 {
-        store.insert_capture(Capture::text(&format!("Item {i}"))).unwrap();
+        store
+            .insert_capture(Capture::text(format!("Item {i}")))
+            .unwrap();
     }
 
     let mut handles = Vec::new();
@@ -497,7 +540,11 @@ fn test_regression_finding_3_deadlock_switch_root_concurrent_queries() {
     // non-empty list here would be asserting that switch_root moves bytes,
     // which is not its job.
     let list = store.list(&Filter::default(), Sort::Newest, 0, 10);
-    assert!(list.is_ok(), "store unusable after switch_root: {:?}", list.err());
+    assert!(
+        list.is_ok(),
+        "store unusable after switch_root: {:?}",
+        list.err()
+    );
 }
 
 #[test]
@@ -555,7 +602,9 @@ fn test_regression_finding_5_item_formats_blob_refcounting() {
     assert_eq!(formats1[0].1.len(), large_html.len());
 
     // Insert a separate plain item with same hash or another item
-    let item2 = store.insert_capture(Capture::text("Separate item")).unwrap();
+    let item2 = store
+        .insert_capture(Capture::text("Separate item"))
+        .unwrap();
 
     // Delete item 2
     store.delete(&[item2.id]).unwrap();
@@ -623,7 +672,9 @@ fn test_regression_finding_8_fsync_lock_concurrency() {
 
     // Pre-insert some items
     for i in 0..5 {
-        store.insert_capture(Capture::text(&format!("Item {i}"))).unwrap();
+        store
+            .insert_capture(Capture::text(format!("Item {i}")))
+            .unwrap();
     }
 
     let s1 = store.clone();
@@ -692,7 +743,10 @@ fn test_sweep_clears_missing_thumb_without_losing_the_item() {
     let item = store.insert_capture(cap).unwrap();
 
     let before = store.get(item.id).unwrap();
-    assert!(before.thumb_url.is_some(), "the fixture needs a thumbnail to remove");
+    assert!(
+        before.thumb_url.is_some(),
+        "the fixture needs a thumbnail to remove"
+    );
 
     // Thumbnails are encoded on a background worker, so wait for the file to
     // exist before removing it — deleting first only races the writer and
@@ -728,7 +782,10 @@ fn test_sweep_clears_missing_thumb_without_losing_the_item() {
         "thumb_url must be cleared once its file is gone, not left pointing at nothing"
     );
     assert_eq!(
-        store.list(&Filter::default(), Sort::Newest, 0, 10).unwrap().len(),
+        store
+            .list(&Filter::default(), Sort::Newest, 0, 10)
+            .unwrap()
+            .len(),
         1,
         "the item itself must survive: only the preview was lost"
     );

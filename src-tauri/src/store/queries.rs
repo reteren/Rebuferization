@@ -332,10 +332,8 @@ fn search_with_like(
 ) -> AppResult<Vec<ItemDto>> {
     let mut conditions = vec!["(preview_text LIKE ? OR title LIKE ?)".to_string()];
     let pattern = format!("%{}%", query);
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![
-        Box::new(pattern.clone()),
-        Box::new(pattern),
-    ];
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+        vec![Box::new(pattern.clone()), Box::new(pattern)];
 
     if let Some(kind) = filter.kind {
         conditions.push("kind = ?".into());
@@ -376,12 +374,12 @@ fn search_with_like(
 /// Retrieves a single item by id.
 pub fn get_item(conn: &Connection, root: &Path, id: i64) -> AppResult<ItemDto> {
     let sql = format!("SELECT {} FROM items WHERE id = ?1", SELECT_ITEMS_COLUMNS);
-    let raw: RawItemRow = conn
-        .query_row(&sql, [id], RawItemRow::from_row)
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(id),
-            other => AppError::Db(other),
-        })?;
+    let raw: RawItemRow =
+        conn.query_row(&sql, [id], RawItemRow::from_row)
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(id),
+                other => AppError::Db(other),
+            })?;
 
     let mut items = map_rows_to_items(vec![raw], conn, root)?;
     items.pop().ok_or(AppError::NotFound(id))
@@ -398,7 +396,9 @@ pub fn get_blob_path(conn: &Connection, root: &Path, id: i64) -> AppResult<PathB
         .optional()?;
 
     if let Some((is_ref, blob_path, ref_path)) = res {
-        if let Some(p) = resolve_blob_or_ref(root, is_ref != 0, blob_path.as_deref(), ref_path.as_deref()) {
+        if let Some(p) =
+            resolve_blob_or_ref(root, is_ref != 0, blob_path.as_deref(), ref_path.as_deref())
+        {
             return Ok(p);
         }
     }
@@ -503,11 +503,10 @@ pub fn delete_items(conn: &mut Connection, root: &Path, ids: &[i64]) -> AppResul
         if let Some((hash, blob_path, thumb_path, is_ref)) = row {
             tx.execute("DELETE FROM items WHERE id = ?1", [id])?;
             if is_ref == 0 {
-                let count_items: i64 = tx.query_row(
-                    "SELECT COUNT(*) FROM items WHERE hash = ?1",
-                    [&hash],
-                    |r| r.get(0),
-                )?;
+                let count_items: i64 =
+                    tx.query_row("SELECT COUNT(*) FROM items WHERE hash = ?1", [&hash], |r| {
+                        r.get(0)
+                    })?;
                 let count_formats: i64 = if let Some(ref rel) = blob_path {
                     tx.query_row(
                         "SELECT COUNT(*) FROM item_formats WHERE blob_path = ?1",
@@ -576,7 +575,10 @@ pub fn add_references(conn: &Connection, root: &Path, paths: &[String]) -> AppRe
         let kind = match ext.as_deref() {
             Some("PNG" | "JPG" | "JPEG" | "GIF" | "WEBP" | "BMP" | "ICO" | "TIFF") => Kind::Image,
             Some("MP4" | "MKV" | "MOV" | "AVI" | "WEBM") => Kind::Video,
-            Some("TXT" | "RS" | "JS" | "TS" | "PY" | "JSON" | "XML" | "MD" | "CSS" | "HTML" | "C" | "CPP" | "GO") => Kind::Text,
+            Some(
+                "TXT" | "RS" | "JS" | "TS" | "PY" | "JSON" | "XML" | "MD" | "CSS" | "HTML" | "C"
+                | "CPP" | "GO",
+            ) => Kind::Text,
             _ => Kind::File,
         };
 
@@ -714,11 +716,9 @@ pub fn get_storage_stats(conn: &Connection, root: &Path) -> AppResult<StorageSta
         .unwrap_or(0);
 
     let total_bytes: i64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(byte_size), 0) FROM items",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT COALESCE(SUM(byte_size), 0) FROM items", [], |r| {
+            r.get(0)
+        })
         .unwrap_or(0);
 
     let db_path = root.join("rebuffer.db");
@@ -732,9 +732,8 @@ pub fn get_storage_stats(conn: &Connection, root: &Path) -> AppResult<StorageSta
         db_bytes += shm_m.len() as i64;
     }
 
-    let mut stmt = conn.prepare(
-        "SELECT kind, COUNT(*), COALESCE(SUM(byte_size), 0) FROM items GROUP BY kind",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT kind, COUNT(*), COALESCE(SUM(byte_size), 0) FROM items GROUP BY kind")?;
     let by_kind = stmt
         .query_map([], |r| {
             Ok(KindStat {
@@ -783,6 +782,11 @@ pub fn get_tab_counts(conn: &Connection) -> AppResult<TabCounts> {
 }
 
 /// Clears history completely or unpinned only. Removes unreferenced blobs, clears FTS, and runs VACUUM.
+/// One row of the clear sweep: id, hash, blob path, thumb path, size, and
+/// whether it is a reference. Named because clippy is right that a six-tuple
+/// in a signature tells the reader nothing.
+type ClearRow = (i64, String, Option<String>, Option<String>, i64, i64);
+
 pub fn clear_history(
     conn: &Connection,
     root: &Path,
@@ -800,7 +804,7 @@ pub fn clear_history(
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows: Vec<(i64, String, Option<String>, Option<String>, i64, i64)> = stmt
+    let rows: Vec<ClearRow> = stmt
         .query_map([], |r| {
             Ok((
                 r.get(0)?,

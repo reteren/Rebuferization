@@ -17,25 +17,25 @@ use parking_lot::Mutex;
 use windows::core::{implement, BOOL, HRESULT, PCWSTR};
 // In windows 0.61 the E_* HRESULT constants live under Win32::Foundation, not
 // windows::core.
-use windows::Win32::Foundation::{E_NOTIMPL, E_OUTOFMEMORY, E_POINTER};
 use windows::Win32::Foundation::{
-    DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, GlobalFree,
+    GlobalFree, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
     OLE_E_ADVISENOTSUPPORTED, S_FALSE,
 };
+use windows::Win32::Foundation::{E_NOTIMPL, E_OUTOFMEMORY, E_POINTER};
 use windows::Win32::System::Com::{
-    CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED, DATADIR_GET,
-    DVASPECT_CONTENT, FORMATETC, IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC,
-    IEnumFORMATETC_Impl, IEnumSTATDATA, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
+    CoInitializeEx, CoTaskMemFree, CoUninitialize, IAdviseSink, IDataObject, IDataObject_Impl,
+    IEnumFORMATETC, IEnumFORMATETC_Impl, IEnumSTATDATA, COINIT_APARTMENTTHREADED, DATADIR_GET,
+    DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::{
-    CF_HDROP, DoDragDrop, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, IDropSource,
-    IDropSource_Impl, OleInitialize, OleUninitialize,
+    DoDragDrop, IDropSource, IDropSource_Impl, OleInitialize, OleUninitialize, CF_HDROP,
+    DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE,
 };
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    DROPFILES, SHOpenFolderAndSelectItems, SHOpenWithDialog, SHParseDisplayName, ShellExecuteW,
+    SHOpenFolderAndSelectItems, SHOpenWithDialog, SHParseDisplayName, ShellExecuteW, DROPFILES,
     OPENASINFO, OPEN_AS_INFO_FLAGS,
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -180,8 +180,14 @@ pub fn reveal(path: &Path) -> AppResult<()> {
             let parent = path.parent().unwrap_or(path);
             let parent_wide = wide(parent.as_os_str());
             let mut parent_pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-            SHParseDisplayName(PCWSTR(parent_wide.as_ptr()), None, &mut parent_pidl, 0, None)
-                .map_err(|e| AppError::Win(format!("SHParseDisplayName failed: {e}")))?;
+            SHParseDisplayName(
+                PCWSTR(parent_wide.as_ptr()),
+                None,
+                &mut parent_pidl,
+                0,
+                None,
+            )
+            .map_err(|e| AppError::Win(format!("SHParseDisplayName failed: {e}")))?;
             let result = SHOpenFolderAndSelectItems(parent_pidl, Some(&[item_pidl]), 0);
             if !parent_pidl.is_null() {
                 CoTaskMemFree(Some(parent_pidl as *const std::ffi::c_void));
@@ -371,9 +377,28 @@ fn sanitize_stem(name: &str) -> String {
 fn is_reserved_name(stem: &str) -> bool {
     matches!(
         stem.to_ascii_uppercase().as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     )
 }
 
@@ -562,7 +587,11 @@ impl IEnumFORMATETC_Impl for FormatEnum_Impl {
         if count > 0 {
             unsafe {
                 // Sound: the caller's contract guarantees rgelt has room for celt FORMATETC elements, and we write at most celt of them.
-                std::ptr::copy_nonoverlapping(self.items.as_ptr().add(self.pos.get()), rgelt, count);
+                std::ptr::copy_nonoverlapping(
+                    self.items.as_ptr().add(self.pos.get()),
+                    rgelt,
+                    count,
+                );
             }
         }
         self.pos.set(self.pos.get() + count);
@@ -712,7 +741,7 @@ mod tests {
     #[test]
     fn test_cf_hdrop_single_path() {
         let path = PathBuf::from(r"C:\Users\me\Pictures\shot.png");
-        let buf = build_cf_hdrop(&[path.clone()]).unwrap();
+        let buf = build_cf_hdrop(std::slice::from_ref(&path)).unwrap();
 
         // Header: pFiles == 20, fNC == 0, fWide == 1.
         assert_eq!(u32::from_le_bytes(buf[0..4].try_into().unwrap()), 20);
@@ -783,7 +812,7 @@ mod tests {
     #[test]
     fn test_cf_hdrop_unicode_path() {
         let path = PathBuf::from(r"C:\tmp\фото.png");
-        let buf = build_cf_hdrop(&[path.clone()]).unwrap();
+        let buf = build_cf_hdrop(std::slice::from_ref(&path)).unwrap();
         let units: Vec<u16> = path
             .as_os_str()
             .encode_wide()
@@ -831,7 +860,10 @@ mod tests {
     #[test]
     fn test_temp_name_sanitizes_illegal_title_chars() {
         let it = item(1, Some("Q3: report* (final)?"), Some("TXT"), None);
-        assert_eq!(temp_file_name_on(&it, "2026-08-30"), "Q3_ report_ (final)_.txt");
+        assert_eq!(
+            temp_file_name_on(&it, "2026-08-30"),
+            "Q3_ report_ (final)_.txt"
+        );
     }
 
     #[test]
@@ -850,7 +882,10 @@ mod tests {
     fn test_temp_name_image_fallback() {
         let mut it = item(1, None, Some("PNG"), None);
         it.kind = Kind::Image;
-        assert_eq!(temp_file_name_on(&it, "2026-08-30"), "screenshot-2026-08-30.png");
+        assert_eq!(
+            temp_file_name_on(&it, "2026-08-30"),
+            "screenshot-2026-08-30.png"
+        );
     }
 
     #[test]
@@ -859,7 +894,10 @@ mod tests {
         assert_eq!(sanitize_stem("nul"), "_nul");
         assert_eq!(sanitize_stem("notes."), "notes");
         assert_eq!(sanitize_stem("notes...   "), "notes");
-        assert_eq!(sanitize_stem("a<b>c:d\"e/f\\g|h?i*j"), "a_b_c_d_e_f_g_h_i_j");
+        assert_eq!(
+            sanitize_stem("a<b>c:d\"e/f\\g|h?i*j"),
+            "a_b_c_d_e_f_g_h_i_j"
+        );
         assert_eq!(sanitize_stem(""), "");
         assert_eq!(sanitize_stem("..."), "");
     }
@@ -908,13 +946,30 @@ mod tests {
         std::fs::write(&blob_b, b"bbb").unwrap();
         let mut cache = HashMap::new();
 
-        let a = materialize_into(dir.path(), &mut cache, &blob_a, &item(1, Some("same"), Some("png"), None)).unwrap();
-        let b = materialize_into(dir.path(), &mut cache, &blob_b, &item(2, Some("same"), Some("png"), None)).unwrap();
+        let a = materialize_into(
+            dir.path(),
+            &mut cache,
+            &blob_a,
+            &item(1, Some("same"), Some("png"), None),
+        )
+        .unwrap();
+        let b = materialize_into(
+            dir.path(),
+            &mut cache,
+            &blob_b,
+            &item(2, Some("same"), Some("png"), None),
+        )
+        .unwrap();
         assert_eq!(a.file_name().unwrap(), "same.png");
         assert_eq!(b.file_name().unwrap(), "same-1.png");
         assert_eq!(std::fs::read(&b).unwrap(), b"bbb");
 
-        let c = materialize_into(dir.path(), &mut cache, &blob_b, &item(3, None, None, None)).unwrap();
-        assert!(c.file_name().unwrap().to_string_lossy().starts_with("rebuffer-"));
+        let c =
+            materialize_into(dir.path(), &mut cache, &blob_b, &item(3, None, None, None)).unwrap();
+        assert!(c
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("rebuffer-"));
     }
 }

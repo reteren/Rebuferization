@@ -11,9 +11,7 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardSequenceNumber, OpenClipboard,
     RegisterClipboardFormatW, SetClipboardData,
 };
-use windows::Win32::System::Memory::{
-    GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
-};
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::UI::Shell::DROPFILES;
 
 use crate::clipboard::decode::{FORMAT_IMAGE_PNG, FORMAT_PNG};
@@ -97,8 +95,7 @@ pub fn write_items(store: &Store, ids: &[i64], plain_text: bool) -> AppResult<()
 
     unsafe {
         // Sound: Caller holds open clipboard lock via ClipboardGuard; EmptyClipboard clears contents and assigns ownership to current thread.
-        EmptyClipboard()
-            .map_err(|e| AppError::Other(format!("EmptyClipboard failed: {e}")))?;
+        EmptyClipboard().map_err(|e| AppError::Other(format!("EmptyClipboard failed: {e}")))?;
     }
     // From here on the clipboard carries our change, so the guard owes the
     // listener a sequence number even if the rest of this function fails.
@@ -202,7 +199,9 @@ pub fn write_items(store: &Store, ids: &[i64], plain_text: bool) -> AppResult<()
             items.push(store.get(id)?);
         }
 
-        let all_files = items.iter().all(|it| matches!(it.kind, Kind::File | Kind::Video));
+        let all_files = items
+            .iter()
+            .all(|it| matches!(it.kind, Kind::File | Kind::Video));
 
         if all_files && !plain_text {
             let mut paths = Vec::new();
@@ -320,7 +319,9 @@ pub fn set_clipboard_text(text: &str) -> AppResult<()> {
         let res = SetClipboardData(13 /* CF_UNICODETEXT */, Some(HANDLE(hglobal.0)));
         if res.is_err() {
             let _ = GlobalFree(Some(hglobal));
-            return Err(AppError::Other("SetClipboardData CF_UNICODETEXT failed".into()));
+            return Err(AppError::Other(
+                "SetClipboardData CF_UNICODETEXT failed".into(),
+            ));
         }
     }
     Ok(())
@@ -340,7 +341,11 @@ pub fn set_clipboard_hdrop(paths: &[String]) -> AppResult<()> {
     utf16_chars.push(0); // double null terminator
 
     let dropfiles_size = std::mem::size_of::<DROPFILES>();
-    let total_size = match utf16_chars.len().checked_mul(2).and_then(|bytes| bytes.checked_add(dropfiles_size)) {
+    let total_size = match utf16_chars
+        .len()
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(dropfiles_size))
+    {
         Some(size) => size,
         None => return Err(AppError::Other("DROPFILES total size overflow".into())),
     };
@@ -393,7 +398,10 @@ fn png_to_dib(png_bytes: &[u8]) -> AppResult<Vec<u8>> {
     let height = rgba.height();
 
     let header_size = 40usize;
-    let pixel_bytes_len = match (width as usize).checked_mul(height as usize).and_then(|px| px.checked_mul(4)) {
+    let pixel_bytes_len = match (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|px| px.checked_mul(4))
+    {
         Some(len) => len,
         None => return Err(AppError::Other("Image dimensions overflow DIB size".into())),
     };

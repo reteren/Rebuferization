@@ -38,9 +38,9 @@ fn get_free_disk_space(path: &Path) -> Option<u64> {
     // measure.
     let mut probe = path;
     while !probe.exists() {
-        match probe.parent() {
-            Some(parent) => probe = parent,
-            None => return None,
+        {
+            let parent = probe.parent()?;
+            probe = parent
         }
     }
     let path_str = probe.to_str()?;
@@ -107,7 +107,7 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
 
     let conn_guard = store.conn();
 
-// Reference set #1: every hash referenced by an items row (covers both
+    // Reference set #1: every hash referenced by an items row (covers both
     // primary blobs and thumbnails, which are keyed by the item hash).
     let item_hashes: HashSet<String> = {
         let mut stmt = conn_guard.prepare("SELECT DISTINCT hash FROM items")?;
@@ -119,8 +119,8 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
     // path. The file-name component IS the hash, so storing that makes the
     // comparison exact instead of a per-file `LIKE '%<hash>'`.
     let format_hashes: HashSet<String> = {
-        let mut stmt = conn_guard
-            .prepare("SELECT blob_path FROM item_formats WHERE blob_path IS NOT NULL")?;
+        let mut stmt =
+            conn_guard.prepare("SELECT blob_path FROM item_formats WHERE blob_path IS NOT NULL")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.filter_map(|r| r.ok())
             .filter_map(|p| {
@@ -136,7 +136,7 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
     // queue: iterating ~25,000 entries on one thread is hundreds of
     // milliseconds even in release, and the `thumbs/` directory alone would
     // otherwise serialize a third of the work. Entries are classified as
-// dir/file from the directory listing's own attributes (no extra syscall).
+    // dir/file from the directory listing's own attributes (no extra syscall).
     let mut existing_blobs: HashSet<String> = HashSet::new();
     {
         let thumbs_dir = blobs_dir.join("thumbs");
@@ -168,18 +168,18 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
                             // directory reads are the expensive part and must
                             // run concurrently across threads. Only the
                             // enqueue takes the lock.
-                            let children: Vec<(std::path::PathBuf, bool)> =
-                                if let Ok(rd) = std::fs::read_dir(&path) {
-                                    rd.flatten()
-                                        .map(|e| {
-                                            let d =
-                                                e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                                            (e.path(), d)
-                                        })
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                };
+                            let children: Vec<(std::path::PathBuf, bool)> = if let Ok(rd) =
+                                std::fs::read_dir(&path)
+                            {
+                                rd.flatten()
+                                    .map(|e| {
+                                        let d = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                                        (e.path(), d)
+                                    })
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
                             queue.lock().extend(children);
                             continue;
                         }
@@ -217,7 +217,7 @@ pub fn startup_sweep(store: &Store) -> AppResult<()> {
                     local_existing
                 }));
             }
-for h in handles {
+            for h in handles {
                 existing_blobs.extend(h.join().unwrap());
             }
         });
@@ -282,8 +282,8 @@ for h in handles {
                 orphaned.len()
             );
             for id in orphaned {
-                let _ = conn_guard
-                    .execute("UPDATE items SET thumb_path = NULL WHERE id = ?1", [id]);
+                let _ =
+                    conn_guard.execute("UPDATE items SET thumb_path = NULL WHERE id = ?1", [id]);
             }
         }
     }
@@ -320,7 +320,8 @@ pub fn run_cleanup_with_app(
                  FROM items
                  WHERE pinned = 0 AND is_reference = 0 AND created_at < ?1",
             )?;
-            let res: Vec<(i64, i64)> = stmt.query_map([cutoff_ms], |r| Ok((r.get(0)?, r.get(1)?)))?
+            let res: Vec<(i64, i64)> = stmt
+                .query_map([cutoff_ms], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .filter_map(|r| r.ok())
                 .collect();
             res
@@ -381,7 +382,8 @@ pub fn run_cleanup_with_app(
                      WHERE pinned = 0 AND is_reference = 0
                      ORDER BY created_at ASC",
                 )?;
-                let res: Vec<(i64, i64)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                let res: Vec<(i64, i64)> = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                     .filter_map(|r| r.ok())
                     .collect();
                 res
@@ -464,7 +466,10 @@ pub fn relocate(app: &AppHandle, store: &Store, target: &Path) -> AppResult<()> 
     let mut total_blob_size = 0u64;
     let mut total_files = 0u64;
 
-    for entry in WalkDir::new(source_root.join("blobs")).into_iter().flatten() {
+    for entry in WalkDir::new(source_root.join("blobs"))
+        .into_iter()
+        .flatten()
+    {
         if entry.file_type().is_file() {
             total_blob_size += entry.metadata().map(|m| m.len()).unwrap_or(0);
             total_files += 1;
@@ -506,10 +511,7 @@ pub fn relocate(app: &AppHandle, store: &Store, target: &Path) -> AppResult<()> 
     }
 
     // Copy db file
-    std::fs::copy(
-        source_root.join("rebuffer.db"),
-        target.join("rebuffer.db"),
-    )?;
+    std::fs::copy(source_root.join("rebuffer.db"), target.join("rebuffer.db"))?;
 
     // Copy blobs
     let mut copied_files = 0u64;
@@ -518,9 +520,10 @@ pub fn relocate(app: &AppHandle, store: &Store, target: &Path) -> AppResult<()> 
 
     for entry in WalkDir::new(&blobs_src).into_iter().flatten() {
         if entry.file_type().is_file() {
-            let rel = entry.path().strip_prefix(&blobs_src).map_err(|e| {
-                AppError::Other(e.to_string())
-            })?;
+            let rel = entry
+                .path()
+                .strip_prefix(&blobs_src)
+                .map_err(|e| AppError::Other(e.to_string()))?;
             let dest_file = blobs_dst.join(rel);
             if let Some(parent) = dest_file.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -557,7 +560,8 @@ pub fn relocate(app: &AppHandle, store: &Store, target: &Path) -> AppResult<()> 
         .query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))?;
 
     let target_conn = rusqlite::Connection::open(target.join("rebuffer.db"))?;
-    let target_count: i64 = target_conn.query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))?;
+    let target_count: i64 =
+        target_conn.query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))?;
 
     if src_count != target_count {
         return Err(AppError::Other(format!(
@@ -809,9 +813,10 @@ pub fn export(app: &AppHandle, store: &Store, target: &Path) -> AppResult<()> {
     let mut written_blobs = 0u64;
     for entry in WalkDir::new(&blobs_dir).into_iter().flatten() {
         if entry.file_type().is_file() {
-            let rel = entry.path().strip_prefix(&root).map_err(|e| {
-                AppError::Other(e.to_string())
-            })?;
+            let rel = entry
+                .path()
+                .strip_prefix(&root)
+                .map_err(|e| AppError::Other(e.to_string()))?;
             let entry_name = rel.to_string_lossy().replace('\\', "/");
             zip.start_file(&entry_name, options)
                 .map_err(|e| AppError::Other(e.to_string()))?;
@@ -848,12 +853,7 @@ pub fn export(app: &AppHandle, store: &Store, target: &Path) -> AppResult<()> {
 }
 
 /// Imports items and blobs from a `.rbx` archive in either Merge or Replace mode.
-pub fn import(
-    app: &AppHandle,
-    store: &Store,
-    archive: &Path,
-    mode: ImportMode,
-) -> AppResult<()> {
+pub fn import(app: &AppHandle, store: &Store, archive: &Path, mode: ImportMode) -> AppResult<()> {
     let root = store.root().to_path_buf();
     let file = std::fs::File::open(archive)?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| AppError::Other(e.to_string()))?;
@@ -1054,7 +1054,14 @@ mod tests {
         let res = store.run_cleanup(Some(30)).unwrap();
         assert_eq!(res.removed_items, 1); // Only item 2 should be removed, item 1 is pinned
 
-        let remaining = store.list(&crate::model::Filter::default(), crate::model::Sort::Newest, 0, 10).unwrap();
+        let remaining = store
+            .list(
+                &crate::model::Filter::default(),
+                crate::model::Sort::Newest,
+                0,
+                10,
+            )
+            .unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, item1.id);
     }
@@ -1112,7 +1119,7 @@ mod tests {
                 let rel = crate::store::blobs::blob_rel_path(&hash);
                 let target = root.join("blobs").join(&rel);
                 std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-                std::fs::write(&target, &seed).unwrap();
+                std::fs::write(&target, seed).unwrap();
                 let (kind, thumb_path) = if i < THUMB_SHARE {
                     let thumb_name = format!("{}.webp", hash);
                     std::fs::write(root.join("blobs").join("thumbs").join(&thumb_name), b"webp")
@@ -1127,7 +1134,7 @@ mod tests {
                         hash,
                         rel,
                         thumb_path,
-                        1_700_000_000_000i64 + i as i64
+                        1_700_000_000_000i64 + i
                     ])
                     .unwrap();
                 blob_rels.push((hash, rel));
@@ -1143,7 +1150,7 @@ mod tests {
                 let rel = crate::store::blobs::blob_rel_path(&hash);
                 let target = root.join("blobs").join(&rel);
                 std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-                std::fs::write(&target, &seed).unwrap();
+                std::fs::write(&target, seed).unwrap();
                 tx.execute(
                     "INSERT INTO item_formats (item_id, format, blob_path, byte_size)
                      VALUES ((SELECT id FROM items WHERE hash = ?1), 'application/octet-stream', ?2, 64)",
@@ -1203,7 +1210,9 @@ mod tests {
             let mut seed = [0u8; 64];
             seed[..8].copy_from_slice(&((1u64 << 40) + i as u64).to_le_bytes());
             let hash = crate::store::blobs::compute_hash(&seed);
-            root.join("blobs").join(crate::store::blobs::blob_rel_path(&hash)).exists()
+            root.join("blobs")
+                .join(crate::store::blobs::blob_rel_path(&hash))
+                .exists()
         });
         assert!(formats_ok, "format-only blobs must survive");
         drop(store);
@@ -1213,5 +1222,3 @@ mod tests {
         );
     }
 }
-
-
