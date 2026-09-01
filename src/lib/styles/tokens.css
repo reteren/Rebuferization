@@ -10,6 +10,10 @@
 @import './themes/skyblue.css';
 @import './themes/dark-green.css';
 @import './themes/dark-purple.css';
+@import './themes/ember.css';
+@import './themes/paper.css';
+@import './themes/ocean.css';
+@import './themes/wine.css';
 
 /* OWNER: worker W5 — dark liquid glass design tokens.
    Every component reads tokens; nothing hardcodes a color, radius or duration.

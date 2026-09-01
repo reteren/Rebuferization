@@ -1,0 +1,44 @@
+/* Theme: ocean
+   Deep teal-navy — the gap between the blue and the green themes.
+   Its surfaces carry real colour rather than a tint of one. */
+:root[data-theme="ocean"],
+[data-theme="ocean"] {
+  color-scheme: dark;
+
+  --bg-0: #0c171a;
+  --bg-1: rgba(15, 28, 33, 0.72);
+  --surface-1: rgba(17, 32, 37, 0.78);
+  --surface-2: rgba(21, 41, 48, 0.82);
+  --surface-3: rgba(26, 50, 58, 0.92);
+  --surface-4: rgba(31, 59, 69, 0.95);
+  --swatch-empty: #24444f;
+  --window-wash: radial-gradient(120% 100% at 50% 0%, rgba(58, 214, 214, 0.14), transparent 70%);
+  --overlay-1: rgba(226, 242, 247, 0.07);
+  --scrim-1: rgba(10, 9, 8, 0.58);
+  --scrim-2: rgba(12, 11, 10, 0.58);
+  --border-1: rgba(226, 242, 247, 0.08);
+  --border-2: rgba(226, 242, 247, 0.15);
+  --border-3: rgba(226, 242, 247, 0.24);
+  --window-border: rgba(226, 242, 247, 0.10);
+  --border-media-1: rgba(255, 255, 255, 0.14);
+  --border-media-2: rgba(255, 255, 255, 0.18);
+  --text-1: #e2f2f7;
+  --text-2: rgba(226, 242, 247, 0.64);
+  --text-3: rgba(226, 242, 247, 0.40);
+  --text-bright: #ffffff;
+  --accent: #3ad6d6;
+  --on-accent: #03191c;
+  --ext-1: #7ab8ff;
+  --ext-2: #4ee0b8;
+  --ext-3: #b79cff;
+  --ext-4: #ffc46b;
+  --ext-5: #ff7d9c;
+  --ext-6: #57d8f0;
+  --ext-7: #9ede63;
+  --danger: #ff7d9c;
+  --ok: #4ee0b8;
+  --warn: #ffc46b;
+  --shadow-1: 0 1px 2px rgba(4, 10, 12, 0.45);
+  --shadow-2: 0 10px 30px rgba(4, 10, 12, 0.55);
+  --shadow-3: 0 18px 60px rgba(4, 10, 12, 0.65);
+}

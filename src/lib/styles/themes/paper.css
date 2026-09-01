@@ -1,0 +1,44 @@
+/* Theme: paper
+   Warm light: ivory ground with warm grey ink and a burnt-sienna
+   accent. Reads like paper rather than a screen, which is the point. */
+:root[data-theme="paper"],
+[data-theme="paper"] {
+  color-scheme: light;
+
+  --bg-0: #f7f5f0;
+  --bg-1: rgba(245, 242, 235, 0.72);
+  --surface-1: rgba(244, 239, 232, 0.78);
+  --surface-2: rgba(240, 234, 225, 0.82);
+  --surface-3: rgba(236, 229, 217, 0.92);
+  --surface-4: rgba(233, 224, 210, 0.95);
+  --swatch-empty: #e5dbca;
+  --window-wash: radial-gradient(120% 100% at 50% 0%, rgba(149, 74, 24, 0.14), transparent 70%);
+  --overlay-1: rgba(42, 33, 25, 0.05);
+  --scrim-1: rgba(10, 9, 8, 0.58);
+  --scrim-2: rgba(12, 11, 10, 0.58);
+  --border-1: rgba(42, 33, 25, 0.10);
+  --border-2: rgba(42, 33, 25, 0.17);
+  --border-3: rgba(42, 33, 25, 0.28);
+  --window-border: rgba(42, 33, 25, 0.12);
+  --border-media-1: rgba(255, 255, 255, 0.14);
+  --border-media-2: rgba(255, 255, 255, 0.18);
+  --text-1: #2a2119;
+  --text-2: rgba(42, 33, 25, 0.72);
+  --text-3: rgba(42, 33, 25, 0.48);
+  --text-bright: #ffffff;
+  --accent: #954a18;
+  --on-accent: #ffffff;
+  --ext-1: #1f6feb;
+  --ext-2: #177d5c;
+  --ext-3: #7b3fbf;
+  --ext-4: #a8630c;
+  --ext-5: #c0304a;
+  --ext-6: #0f7b93;
+  --ext-7: #4a7a17;
+  --danger: #c0304a;
+  --ok: #177d5c;
+  --warn: #a8630c;
+  --shadow-1: 0 1px 2px rgba(132, 101, 47, 0.1);
+  --shadow-2: 0 10px 30px rgba(132, 101, 47, 0.14);
+  --shadow-3: 0 18px 60px rgba(132, 101, 47, 0.18);
+}

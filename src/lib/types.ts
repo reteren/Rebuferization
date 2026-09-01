@@ -11,6 +11,10 @@ export const THEMES = [
   'skyblue',
   'dark-green',
   'dark-purple',
+  'ember',
+  'ocean',
+  'wine',
+  'paper',
 ] as const
 export type Theme = (typeof THEMES)[number]
 
@@ -22,6 +26,10 @@ export const THEME_LABELS: Record<Theme, string> = {
   skyblue: 'Sky blue',
   'dark-green': 'Dark green',
   'dark-purple': 'Dark purple',
+  ember: 'Ember',
+  ocean: 'Ocean',
+  wine: 'Wine',
+  paper: 'Paper',
 }
 
 export type Kind = 'text' | 'image' | 'video' | 'file' | 'other'

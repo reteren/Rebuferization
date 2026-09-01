@@ -228,7 +228,7 @@ fn is_valid_hex(s: &str) -> bool {
 
 /// Post-deserialization clamp. Sanitization at the JSON level happens first
 /// Mirrors THEMES in src/lib/types.ts. A name absent from both is not a theme.
-const THEMES: [&str; 7] = [
+const THEMES: [&str; 11] = [
     "darkblue",
     "black",
     "light",
@@ -236,6 +236,10 @@ const THEMES: [&str; 7] = [
     "skyblue",
     "dark-green",
     "dark-purple",
+    "ember",
+    "ocean",
+    "wine",
+    "paper",
 ];
 
 /// (`sanitize_json`); this catches anything the type system let through.
