@@ -110,22 +110,6 @@ See [`docs/INSTALLER.md`](docs/INSTALLER.md).
 
 ---
 
-## Stack
-
-| Layer | Choice | Why |
-|---|---|---|
-| Shell | Tauri 2 | Native window; idle RAM measured at 45.8 MB for the main process |
-| Backend | Rust | Direct WinAPI access for clipboard, hooks, and paste injection |
-| Frontend | Svelte 5 + TypeScript + Vite | Hotkey-to-visible measured at 4.1 ms median (target 80 ms) |
-| Database | SQLite (WAL) via `rusqlite` | Crash-safe metadata + FTS5 full-text search |
-| Blobs | Content-addressed files on disk | Large items don't belong in a database row; thumbnails as WebP |
-
-Windows only. Developed and tested on Windows 11; a Windows 10 flat-backdrop fallback exists but has not yet been run on real Windows 10 hardware.
-
-Key crates: `windows`, `arboard`, `rusqlite`, `image`, `webp`, `blake3`, `zip`, `walkdir`, `urlencoding`, `window-vibrancy`, and the Tauri plugins (`global-shortcut`, `autostart`, `single-instance`, `notification`, `dialog`, `opener`). The full list lives in `src-tauri/Cargo.toml`.
-
----
-
 ## Getting started
 
 ### Prerequisites
@@ -158,58 +142,6 @@ npm run tauri build
 ```
 
 Output lands in `src-tauri/target/release/bundle/nsis/`. The build is unsigned, so SmartScreen will warn on first run, which is expected for an unsigned open-source binary.
-
----
-
-## Project layout
-
-```
-rebuffer/
-├─ index.html / settings.html  # the two Vite entry points (popup and settings)
-├─ src/                        # Svelte frontend
-│  ├─ popup.ts / settings.ts   # entry scripts for the two pages
-│  └─ lib/styles/themes/       # one file per theme, 36 colour tokens each
-│  ├─ routes/
-│  │  ├─ Popup.svelte          # the Alt+V window
-│  │  └─ Settings.svelte       # settings window
-│  ├─ lib/
-│  │  ├─ components/           # Card, Grid, Tabs, ZoomDial, ContextMenu, ...
-│  │  ├─ stores/               # items, settings, selection
-│  │  └─ styles/               # global.css, tokens.css
-│  └─ ipc.ts                   # the only file that talks to the backend
-├─ src-tauri/
-│  ├─ src/
-│  │  ├─ main.rs / lib.rs
-│  │  ├─ capture.rs            # clipboard capture
-│  │  ├─ clipboard/            # decoders, writer
-│  │  ├─ hotkey/               # RegisterHotKey + optional LL hook
-│  │  ├─ store/                # SQLite, blob store, janitor
-│  │  ├─ window/               # positioning, vibrancy, paste injection
-│  │  ├─ settings.rs / tray.rs / commands.rs / logging.rs / model.rs
-│  ├─ migrations/              # schema (0001_init.sql)
-│  └─ tauri.conf.json
-├─ docs/                       # SPEC, ROADMAP, DECISIONS, PERF, THEMES, ...
-├─ tools/gen_themes.py         # generates a theme's 36 tokens consistently
-└─ README.md
-```
-
----
-
-## Data location
-
-```
-%APPDATA%\Rebuffer\
-├─ rebuffer.db          # metadata + search index (+ -wal / -shm)
-├─ settings.json
-├─ logs\                # rotating tracing logs
-└─ blobs\
-   ├─ ab\cd\abcd1234…   # content-addressed originals
-   └─ thumbs\           # WebP previews
-```
-
-The store folder is configurable in Settings; changing it migrates existing data.
-
-⚠️ **Your clipboard history is sensitive.** It sits in your user profile, protected by Windows file permissions, but it is not encrypted by default. Don't sync this folder to a shared drive.
 
 ---
 
