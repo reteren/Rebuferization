@@ -61,6 +61,10 @@ pub struct WindowSettings {
     pub fixed: FixedSize,
     /// 1..=5.
     pub zoom_step: u32,
+    /// An empty strip along the top of the popup that the window can be
+    /// dragged by. Off by default. It is added *on top of* the configured
+    /// size, so turning it on never costs the grid any room.
+    pub drag_bar: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -145,6 +149,7 @@ impl Default for WindowSettings {
             percent_of_monitor: 40,
             fixed: FixedSize::default(),
             zoom_step: 3,
+            drag_bar: false,
         }
     }
 }
@@ -310,6 +315,7 @@ fn sanitize_json(v: &mut Value) {
         );
         clamp_number(o, "percentOfMonitor", 10.0, 100.0);
         clamp_number(o, "zoomStep", 1.0, 5.0);
+        require_bool(o, "dragBar");
         sanitize_section(o, "fixed", |f| {
             require_number(f, "width");
             require_number(f, "height");
@@ -1059,6 +1065,49 @@ mod tests {
         assert!(
             !path.with_extension("json.tmp").exists(),
             "no temp file left behind"
+        );
+    }
+
+    #[test]
+    fn the_drag_bar_is_off_until_asked_for_and_then_persists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        let store = SettingsStore::load(&path).expect("load");
+        assert!(!store.get().window.drag_bar, "off unless the user asks");
+
+        let patched = store
+            .patch(json!({ "window": { "dragBar": true } }))
+            .expect("patch");
+        assert!(patched.window.drag_bar);
+        let on_disk: Value =
+            serde_json::from_slice(&fs::read(&path).expect("file exists")).expect("valid json");
+        assert_eq!(on_disk["window"]["dragBar"], true);
+
+        // A settings.json written before the setting existed must still load,
+        // with the bar off — that is every existing install.
+        let old_path = dir.path().join("old.json");
+        fs::write(
+            &old_path,
+            br#"{"version":1,"window":{"sizeMode":"fixed","zoomStep":2}}"#,
+        )
+        .expect("write");
+        let old = SettingsStore::load(&old_path).expect("load");
+        assert!(!old.get().window.drag_bar);
+        assert_eq!(old.get().window.size_mode, "fixed");
+
+        // And a nonsense value falls back rather than costing the whole section.
+        let bad_path = dir.path().join("bad.json");
+        fs::write(
+            &bad_path,
+            br#"{"version":1,"window":{"dragBar":"yes please","zoomStep":4}}"#,
+        )
+        .expect("write");
+        let bad = SettingsStore::load(&bad_path).expect("load");
+        assert!(!bad.get().window.drag_bar);
+        assert_eq!(
+            bad.get().window.zoom_step,
+            4,
+            "one bad field costs no other"
         );
     }
 

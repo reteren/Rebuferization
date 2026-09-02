@@ -34,6 +34,7 @@
     setPinned,
     showInFolder,
     showSettingsWindow,
+    startWindowDrag,
     type UnlistenFn,
   } from '../lib/ipc'
   import { items } from '../lib/stores/items.svelte'
@@ -480,6 +481,16 @@
     })
   }
 
+  /** Left button only — the right button opens nothing here, and letting the
+   *  middle one start a drag would be a surprise. preventDefault stops the
+   *  webview from starting a text selection under the pointer that Windows'
+   *  move loop then never ends. */
+  function onDragBarPress(e: MouseEvent): void {
+    if (e.button !== 0) return
+    e.preventDefault()
+    guarded(startWindowDrag())
+  }
+
   function onDragStart(e: DragEvent): void {
     const card = (e.target as HTMLElement | null)?.closest?.('[data-id]') as HTMLElement | null
     const fromId = card ? Number(card.dataset.id) : NaN
@@ -574,6 +585,20 @@
 </script>
 
 <div class="popup">
+  {#if settings.current.window.dragBar}
+    <!-- Deliberately empty: a strip of window frame to grab, nothing more.
+         Its height is added to the configured window size in position.rs, so
+         switching it on costs the grid nothing.
+
+         Tauri's own data-tauri-drag-region is not used. It also maps a double
+         click to maximize, and a popup that is placed at the cursor and always
+         on top has no business being maximized by a stray double click. -->
+    <div
+      class="drag-bar"
+      role="presentation"
+      onmousedown={onDragBarPress}
+    ></div>
+  {/if}
   {#if error}
     <div class="banner error" role="alert">
       <span>{error}</span>
@@ -689,6 +714,14 @@
     color: var(--text-1, #e8eaf0);
     font-family: var(--font-ui, 'Segoe UI', system-ui, sans-serif);
     font-size: 13px;
+  }
+
+  /* Empty by design. The height is mirrored by DRAG_BAR_HEIGHT in
+     window/position.rs, which grows the window by exactly this much. */
+  .drag-bar {
+    flex: none;
+    height: 28px;
+    user-select: none;
   }
 
   .header {

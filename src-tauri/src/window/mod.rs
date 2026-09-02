@@ -11,13 +11,13 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, SetForegroundWindow,
-    SetWindowLongPtrW, GWL_EXSTYLE, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCLBUTTONDOWN,
-    WM_NCLBUTTONUP, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    GetClientRect, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
+    SetForegroundWindow, SetWindowLongPtrW, GWL_EXSTYLE, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE,
+    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
 
 use crate::error::{AppError, AppResult};
@@ -42,6 +42,13 @@ static IN_MOVE_OR_RESIZE: AtomicBool = AtomicBool::new(false);
 /// button-down, not just while the modal loop is running. Cleared on
 /// button-up and on `WM_EXITSIZEMOVE`.
 static NC_BUTTON_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// The popup's client size when a move/size drag began, so the end of the drag
+/// can tell a resize from a plain move. With the drag bar on, moving the window
+/// is an everyday action, and a move must not be mistaken for a resize — that
+/// would rewrite `sizeMode` to `"fixed"` and silently drop a percent-of-monitor
+/// setting the user had chosen.
+static SIZE_AT_MOVE_START: Mutex<Option<(i32, i32)>> = Mutex::new(None);
 
 /// The `AppHandle` used by the subclass proc, which cannot capture. Set once
 /// when the popup subclass is wired; used to persist the dragged size and to
@@ -90,12 +97,17 @@ unsafe extern "system" fn popup_subclass_proc(
         }
         WM_ENTERSIZEMOVE => {
             IN_MOVE_OR_RESIZE.store(true, Ordering::SeqCst);
+            *SIZE_AT_MOVE_START.lock().unwrap() = client_size(hwnd);
         }
         WM_EXITSIZEMOVE => {
             IN_MOVE_OR_RESIZE.store(false, Ordering::SeqCst);
             NC_BUTTON_DOWN.store(false, Ordering::SeqCst);
-            if let Some(app) = POPUP_APP.get() {
-                persist_resized_size(app.clone());
+            let before = SIZE_AT_MOVE_START.lock().unwrap().take();
+            let resized = before.is_none() || before != client_size(hwnd);
+            if resized {
+                if let Some(app) = POPUP_APP.get() {
+                    persist_resized_size(app.clone());
+                }
             }
             // Re-activate the popup so a later genuine focus loss is still
             // observable as the dismissal signal.
@@ -106,6 +118,18 @@ unsafe extern "system" fn popup_subclass_proc(
     // FFI: every message is forwarded unchanged to tao's window proc; the
     // subclass only observes, never alters the window's message handling.
     DefSubclassProc(hwnd, umsg, wparam, lparam)
+}
+
+/// The popup's client size in physical pixels, or `None` if Windows would not
+/// say.
+fn client_size(hwnd: HWND) -> Option<(i32, i32)> {
+    let mut r = RECT::default();
+    // FFI: hwnd is the live popup window and `r` is a plain out-param.
+    if unsafe { GetClientRect(hwnd, &mut r) }.is_ok() {
+        Some((r.right - r.left, r.bottom - r.top))
+    } else {
+        None
+    }
 }
 
 /// The popup's non-client interaction (a border click that did not turn into
@@ -142,6 +166,15 @@ fn persist_resized_size(app: AppHandle) {
         let Some(state) = app.try_state::<AppState>() else {
             tracing::warn!("persist_resized_size: AppState not available");
             return;
+        };
+        // The configured height excludes the drag bar — `window_size` adds it
+        // back on every show. Storing the measured height as-is would add the
+        // bar a second time, and the popup would grow by its height on every
+        // resize.
+        let height = if state.settings.get().window.drag_bar {
+            height.saturating_sub(position::DRAG_BAR_HEIGHT).max(1)
+        } else {
+            height
         };
         match state.settings.patch(serde_json::json!({
             "window": {

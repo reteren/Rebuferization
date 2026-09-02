@@ -36,7 +36,7 @@ use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
     SHOpenFolderAndSelectItems, SHOpenWithDialog, SHParseDisplayName, ShellExecuteW, DROPFILES,
-    OPENASINFO, OPEN_AS_INFO_FLAGS,
+    OAIF_EXEC, OPENASINFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -145,14 +145,51 @@ pub fn open_item_with(store: &Store, id: i64) -> AppResult<()> {
     open_with(path)
 }
 
-/// Opens the shell's "Open with…" dialog for a file.
+/// Opens the shell's "Open with…" dialog for a file — the same picker Explorer
+/// shows, listing the apps that can handle this extension.
+///
+/// Returns as soon as the dialog is on its way, because the dialog is modal for
+/// as long as the user is reading it and the caller is a Tauri command. What the
+/// user picks is between them and the shell; failures are logged.
 pub fn open_with(path: &Path) -> AppResult<()> {
+    let owned = path.to_path_buf();
+    std::thread::Builder::new()
+        .name("open-with-dialog".into())
+        .spawn(move || {
+            if let Err(e) = open_with_blocking(&owned) {
+                tracing::warn!("open with: {e}");
+            }
+        })
+        .map_err(|e| AppError::Other(format!("could not start the open-with thread: {e}")))?;
+    Ok(())
+}
+
+/// The dialog itself. Runs on a thread of its own — see `open_with`.
+///
+/// Two things about this call are not optional.
+///
+/// `OAIF_EXEC`: without it Windows 10 and 11 do not show the picker at all. They
+/// show a message box telling the user to go to Settings > Apps > Default apps,
+/// because the dialog is then read as an attempt to change the default handler,
+/// which the modern shell no longer lets an app do. With the flag it is read as
+/// "open this one file", which is what we mean, and the real picker appears —
+/// hosted by OpenWith.exe, out of our process. The registration flags are
+/// pointless alongside it: Windows 10 ignores OAIF_ALLOW_REGISTRATION,
+/// OAIF_FORCE_REGISTRATION and OAIF_HIDE_REGISTRATION.
+///
+/// A thread of its own: because the picker is an out-of-process COM server, the
+/// call only survives on a thread that owns its apartment and does nothing else
+/// while the dialog is up. Called from the Tauri command's thread it raced the
+/// apartment it was sharing and came back "the remote procedure call failed"
+/// (0x800706BE) — the picker appeared, the app showed an error over it, and
+/// OpenWith.exe was left running with nothing on screen.
+fn open_with_blocking(path: &Path) -> AppResult<()> {
     let _com = ComScope::init()?;
     let p = wide(path.as_os_str());
     let info = OPENASINFO {
         pcszFile: PCWSTR(p.as_ptr()),
         pcszClass: PCWSTR::null(),
-        oaifInFlags: OPEN_AS_INFO_FLAGS(0),
+        oaifInFlags: OAIF_EXEC,
     };
     unsafe {
         SHOpenWithDialog(None, &info)

@@ -21,6 +21,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::error::{AppError, AppResult};
 use crate::settings::WindowSettings;
 
+/// Logical height of the popup's optional drag bar. Mirrored by `.drag-bar` in
+/// Popup.svelte — change one, change both. The bar is added to the configured
+/// window height rather than carved out of it, so switching it on moves the
+/// window's top edge up and leaves the grid exactly the size it was.
+pub const DRAG_BAR_HEIGHT: u32 = 28;
+
 /// Sizes the popup per `settings.window` and CENTERS it on the cursor, clamped
 /// so the whole window fits inside the work area of the monitor under the
 /// cursor. Never lands above the work area's left/top edges.
@@ -172,7 +178,7 @@ fn work_area(monitor: HMONITOR) -> AppResult<(RECT, f64)> {
 fn window_size(ws: &WindowSettings, work: &RECT, scale: f64) -> (u32, u32) {
     let work_w = (work.right - work.left).max(1) as f64;
     let work_h = (work.bottom - work.top).max(1) as f64;
-    match ws.size_mode.as_str() {
+    let (w, h) = match ws.size_mode.as_str() {
         "fixed" => {
             let w = (ws.fixed.width as f64 * scale).round().max(1.0) as u32;
             let h = (ws.fixed.height as f64 * scale).round().max(1.0) as u32;
@@ -185,6 +191,16 @@ fn window_size(ws: &WindowSettings, work: &RECT, scale: f64) -> (u32, u32) {
                 (work_h * pct).round().max(1.0) as u32,
             )
         }
+    };
+    (w, h + drag_bar_pixels(ws, scale))
+}
+
+/// The drag bar's height in physical pixels, or 0 when it is off.
+pub fn drag_bar_pixels(ws: &WindowSettings, scale: f64) -> u32 {
+    if ws.drag_bar {
+        (DRAG_BAR_HEIGHT as f64 * scale).round().max(1.0) as u32
+    } else {
+        0
     }
 }
 
@@ -277,6 +293,39 @@ mod tests {
         let work = rect(48, 0, 1920, 1040);
         // Cursor over the taskbar: pinned up to the work area's left edge.
         assert_eq!(clamp_pos_to_work(10, 500, 768, 416, &work), (48, 500));
+    }
+
+    #[test]
+    fn the_drag_bar_is_added_to_the_configured_height() {
+        let work = rect(0, 0, 1920, 1040);
+        let mut ws = WindowSettings {
+            size_mode: "fixed".into(),
+            fixed: crate::settings::FixedSize {
+                width: 1100,
+                height: 700,
+            },
+            ..WindowSettings::default()
+        };
+
+        // Off: the window is exactly the size that was configured.
+        assert_eq!(window_size(&ws, &work, 1.0), (1100, 700));
+
+        // On: taller by the bar, and no wider. The grid keeps its 700.
+        ws.drag_bar = true;
+        assert_eq!(window_size(&ws, &work, 1.0), (1100, 700 + DRAG_BAR_HEIGHT));
+
+        // The bar is a logical size, so it scales with the monitor like the
+        // rest of the window does.
+        assert_eq!(
+            window_size(&ws, &work, 2.0),
+            (2200, 1400 + 2 * DRAG_BAR_HEIGHT)
+        );
+
+        // Percent mode grows by the same amount; the percentage still describes
+        // the part of the monitor the list gets.
+        ws.size_mode = "percent".into();
+        ws.percent_of_monitor = 50;
+        assert_eq!(window_size(&ws, &work, 1.0), (960, 520 + DRAG_BAR_HEIGHT));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 export type { UnlistenFn } from '@tauri-apps/api/event'
 
@@ -170,6 +171,13 @@ export function showSettingsWindow(): Promise<void> {
 
 export function popupReady(): Promise<void> {
   return invoke<void>('popup_ready')
+}
+
+/** Hands the window over to Windows' own move loop, as if the user had grabbed
+ *  a title bar. Called on mouse-down, not click: the drag has to start while
+ *  the button is still held. */
+export function startWindowDrag(): Promise<void> {
+  return getCurrentWindow().startDragging()
 }
 
 // ---------------------------------------------------------------------------

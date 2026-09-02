@@ -173,6 +173,7 @@ export interface Settings {
     percentOfMonitor: number
     fixed: { width: number; height: number }
     zoomStep: number
+    dragBar: boolean
   }
   behavior: {
     autoPaste: boolean

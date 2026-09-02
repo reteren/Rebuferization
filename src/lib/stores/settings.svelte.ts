@@ -49,6 +49,7 @@ export const DEFAULT_SETTINGS: Settings = {
     percentOfMonitor: 40,
     fixed: { width: 1100, height: 700 },
     zoomStep: 3,
+    dragBar: false,
   },
   behavior: {
     autoPaste: false,

@@ -805,6 +805,23 @@ function resetEverything(): void {
         {/if}
 
         <div class="field">
+          <label class="toggle">
+            <input
+              type="checkbox"
+              checked={settings.current.window.dragBar}
+              onchange={(e) => patch({ window: { dragBar: e.currentTarget.checked } })}
+            />
+            <span>Drag bar on the popup</span>
+          </label>
+          <p class="hint">
+            Adds an empty strip along the top of the popup. Hold the left mouse button on it to
+            move the window. The window grows by the strip's height, so the list keeps the size
+            you set above. The popup still opens at the cursor every time, so a window you moved
+            comes back to the pointer on the next hotkey.
+          </p>
+        </div>
+
+        <div class="field">
           <label class="field-label">
             Grid zoom (1–5)
             <input
