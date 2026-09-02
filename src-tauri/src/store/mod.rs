@@ -38,7 +38,12 @@ fn current_time_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// One image waiting to be thumbnailed on the background thread. The row it
+/// belongs to already exists and is already on screen, which is why the id
+/// travels with it: the worker writes `thumb_path` back and tells the UI, and
+/// until it does the row honestly reports having no thumbnail.
 struct ThumbnailTask {
+    pub item_id: i64,
     pub hash: String,
     pub bytes: Vec<u8>,
     pub root: PathBuf,
@@ -76,16 +81,6 @@ impl Store {
 
         let (thumb_tx, thumb_rx) = channel::<ThumbnailTask>();
 
-        // Background worker thread for thumbnail generation
-        thread::Builder::new()
-            .name("store-thumbnailer".into())
-            .spawn(move || {
-                while let Ok(task) = thumb_rx.recv() {
-                    let _ = write_thumbnail(&task.root, &task.hash, &task.bytes);
-                }
-            })
-            .map_err(|e| AppError::Other(e.to_string()))?;
-
         let inner = Arc::new(StoreInner {
             root: RwLock::new(root.to_path_buf()),
             conn: Mutex::new(conn),
@@ -96,6 +91,49 @@ impl Store {
         });
 
         let store = Store { inner };
+
+        // Background worker for thumbnail generation. It owns the second half
+        // of the capture: the row is inserted with no thumb_path, and this
+        // thread fills it in and emits `item-updated` once the file is really
+        // on disk. Announcing the path up front instead made the card request
+        // a file that did not exist yet, take the <img> error path, and sit on
+        // the placeholder until something happened to re-create the element —
+        // which is exactly what a fresh screenshot looked like.
+        //
+        // A weak reference, like the janitor below, so StoreInner still drops.
+        let weak_inner = Arc::downgrade(&store.inner);
+        thread::Builder::new()
+            .name("store-thumbnailer".into())
+            .spawn(move || {
+                use tauri::Emitter;
+                while let Ok(task) = thumb_rx.recv() {
+                    let rel = match write_thumbnail(&task.root, &task.hash, &task.bytes) {
+                        Ok(Some(rel)) => rel,
+                        // Undecodable image, or the write failed: the row keeps
+                        // its NULL thumb_path and the card keeps the
+                        // placeholder, which is the truth.
+                        _ => continue,
+                    };
+                    let Some(inner) = weak_inner.upgrade() else {
+                        return;
+                    };
+                    {
+                        let conn = inner.conn.lock();
+                        if let Err(e) = conn.execute(
+                            "UPDATE items SET thumb_path = ?1 WHERE id = ?2",
+                            rusqlite::params![rel, task.item_id],
+                        ) {
+                            tracing::warn!("thumbnail written but not recorded: {e}");
+                            continue;
+                        }
+                    }
+                    let app = inner.app_handle.lock().clone();
+                    if let Some(app) = app {
+                        let _ = app.emit(crate::model::events::ITEM_UPDATED, vec![task.item_id]);
+                    }
+                }
+            })
+            .map_err(|e| AppError::Other(e.to_string()))?;
 
         // Run startup integrity sweep
         janitor::startup_sweep(&store)?;
@@ -213,20 +251,20 @@ impl Store {
             None
         };
 
-        // 4. Handle thumbnails for images OUTSIDE the SQLite lock
+        // 4. Handle thumbnails for images OUTSIDE the SQLite lock. Only a
+        //    thumbnail that already exists is recorded now; one that still has
+        //    to be generated is queued after the insert, when the row has an id
+        //    the worker can update and announce. The row is therefore correct
+        //    at every instant: either it has a thumbnail whose file is there,
+        //    or it has none.
+        let mut pending_thumb: Option<Vec<u8>> = None;
         let thumb_path = if cap.kind == Kind::Image {
             let thumb_filename = format!("{}.webp", hash);
             let thumb_target = root.join("blobs").join("thumbs").join(&thumb_filename);
             if thumb_target.exists() {
                 Some(thumb_filename)
-            } else if let Some(ref bytes) = cap.primary {
-                let _ = self.inner.thumb_tx.send(ThumbnailTask {
-                    hash: hash.clone(),
-                    bytes: bytes.clone(),
-                    root: root.clone(),
-                });
-                Some(thumb_filename)
             } else {
+                pending_thumb = cap.primary.clone();
                 None
             }
         } else {
@@ -277,6 +315,9 @@ impl Store {
                     "UPDATE items SET created_at = ?1, copy_count = copy_count + 1 WHERE id = ?2",
                     rusqlite::params![now, id],
                 )?;
+                // A re-copy of an image whose thumbnail file went missing gets
+                // it back, rather than showing the placeholder forever.
+                self.queue_thumbnail(id, &hash, pending_thumb, &root);
                 return queries::get_item(&conn, &root, id);
             }
         }
@@ -333,7 +374,22 @@ impl Store {
             )?;
         }
 
+        self.queue_thumbnail(item_id, &hash, pending_thumb, &root);
+
         queries::get_item(&conn, &root, item_id)
+    }
+
+    /// Hands an image to the thumbnailer thread. A no-op when there is nothing
+    /// to generate — either the item is not an image, or its thumbnail file
+    /// already exists and the row already points at it.
+    fn queue_thumbnail(&self, item_id: i64, hash: &str, bytes: Option<Vec<u8>>, root: &Path) {
+        let Some(bytes) = bytes else { return };
+        let _ = self.inner.thumb_tx.send(ThumbnailTask {
+            item_id,
+            hash: hash.to_string(),
+            bytes,
+            root: root.to_path_buf(),
+        });
     }
 
     pub fn list(
@@ -471,6 +527,67 @@ mod tests {
         // List should return only 1 item
         let list = store.list(&Filter::default(), Sort::Newest, 0, 10).unwrap();
         assert_eq!(list.len(), 1);
+    }
+
+    /// A fresh screenshot used to show as an empty card: the row was announced
+    /// with a thumb_path whose file the background thumbnailer had not written
+    /// yet, so the card's <img> 404'd once and stayed on the placeholder. The
+    /// row must never claim a thumbnail it does not have, and must gain one
+    /// once the worker is done.
+    #[test]
+    fn an_image_gains_its_thumbnail_only_once_the_file_is_on_disk() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+
+        let img = image::RgbaImage::new(320, 200);
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let cap = Capture {
+            kind: Kind::Image,
+            sub_kind: None,
+            primary: Some(png),
+            formats: Vec::new(),
+            files: Vec::new(),
+            preview_text: None,
+            ext: Some("PNG".into()),
+            mime: Some("image/png".into()),
+            width: Some(320),
+            height: Some(200),
+            duration_ms: None,
+            source_app: None,
+            is_reference: false,
+            ref_path: None,
+        };
+
+        let item = store.insert_capture(cap).unwrap();
+        // Whatever the worker has managed by now, the URL and the file agree.
+        let thumb_of = |it: &ItemDto| -> Option<PathBuf> {
+            it.thumb_url.as_ref().map(|u| {
+                let encoded = u.trim_start_matches("http://asset.localhost/");
+                PathBuf::from(urlencoding::decode(encoded).unwrap().into_owned())
+            })
+        };
+        if let Some(p) = thumb_of(&item) {
+            assert!(p.exists(), "announced a thumbnail that is not on disk");
+        }
+
+        // And it does arrive: the worker writes the file, records the path and
+        // the next read of the row carries it.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let fresh = store.get(item.id).unwrap();
+            if let Some(p) = thumb_of(&fresh) {
+                assert!(p.exists(), "thumb_path recorded before the file existed");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the thumbnailer never produced a thumbnail"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]

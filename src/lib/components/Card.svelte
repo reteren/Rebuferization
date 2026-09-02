@@ -13,7 +13,10 @@
     animateGifs: boolean
     style?: string
     onactivate?: (item: ItemDto) => void
-    oncontextmenu?: (item: ItemDto, x: number, y: number) => void
+    /// `rect` is the card's own box, so anything the menu wants to hang off the
+    /// card — the full link, say — can be placed against the tile rather than
+    /// against the cursor.
+    oncontextmenu?: (item: ItemDto, x: number, y: number, rect: DOMRect) => void
     ontoggle?: (item: ItemDto, mode: 'single' | 'ctrl' | 'shift') => void
   }
 
@@ -137,14 +140,18 @@
     }
   }
 
+  let cardEl = $state<HTMLDivElement | null>(null)
+
   function handleContext(e: MouseEvent): void {
     e.preventDefault()
-    oncontextmenu?.(item, e.clientX, e.clientY)
+    const rect = cardEl?.getBoundingClientRect() ?? new DOMRect(e.clientX, e.clientY, 0, 0)
+    oncontextmenu?.(item, e.clientX, e.clientY, rect)
   }
 </script>
 
 <div
   class="card"
+  bind:this={cardEl}
   class:selected
   class:focused
   class:current={isCurrent}

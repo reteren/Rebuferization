@@ -15,7 +15,7 @@
     formatLabelSize: string
     animateGifs: boolean
     onactivate?: (item: ItemDto) => void
-    oncontextmenu?: (item: ItemDto, x: number, y: number) => void
+    oncontextmenu?: (item: ItemDto, x: number, y: number, rect: DOMRect) => void
     ontoggle?: (item: ItemDto, mode: 'single' | 'ctrl' | 'shift') => void
   }
 

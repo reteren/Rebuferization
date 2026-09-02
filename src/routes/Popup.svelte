@@ -79,7 +79,7 @@
   let stats = $state<StorageStats | null>(null)
   let warning = $state<{ text: string; kind: 'warn' | 'report' } | null>(null)
   let error = $state<string | null>(null)
-  let contextMenu = $state<{ item: ItemDto; x: number; y: number } | null>(null)
+  let contextMenu = $state<{ item: ItemDto; x: number; y: number; rect: DOMRect } | null>(null)
   let renameTarget = $state<ItemDto | null>(null)
   let renameValue = $state('')
 
@@ -446,8 +446,8 @@
     selection.toggle(item.id, mode)
   }
 
-  function onCardContextMenu(item: ItemDto, x: number, y: number): void {
-    contextMenu = { item, x, y }
+  function onCardContextMenu(item: ItemDto, x: number, y: number, rect: DOMRect): void {
+    contextMenu = { item, x, y, rect }
   }
 
   /** The single copy path. With closeOnCopy the popup is about to vanish back
@@ -683,6 +683,7 @@
       item={contextMenu.item}
       x={contextMenu.x}
       y={contextMenu.y}
+      anchor={contextMenu.rect}
       onaction={onMenuAction}
     />
   {/if}

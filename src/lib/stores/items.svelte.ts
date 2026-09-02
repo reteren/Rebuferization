@@ -233,7 +233,12 @@ class ItemsStore {
       return
     }
     void this.refreshMeta()
-    if (ids.some((id) => this.list.some((i) => i.id === id))) void this.refreshPage()
+    // Deliberately not conditional on the id being in the current list. A
+    // thumbnail is generated just after its capture is committed, and the
+    // update announcing it can overtake the item-added that introduces the
+    // row — a screenshot would then sit on the placeholder until some
+    // unrelated refresh happened to redraw the card.
+    void this.refreshPage()
   }
 
   private onDeleted(ids: number[]): void {
