@@ -25,39 +25,8 @@
         "resizable": true,
         "skipTaskbar": true,
         "alwaysOnTop": true,
-        "center": false
-      },
-      {
-        "label": "settings",
-        "url": "settings.html",
-        "title": "Rebuffer — Settings",
-        "width": 960,
-        "height": 660,
-        "minWidth": 720,
-        "minHeight": 520,
-        "visible": false,
-        "decorations": false,
-        "transparent": true,
-        "shadow": true,
-        "resizable": true,
-        "center": true,
-        "skipTaskbar": true
-      },
-      {
-        "label": "traymenu",
-        "url": "traymenu.html",
-        "title": "Rebuffer menu",
-        "width": 210,
-        "height": 132,
-        "visible": false,
-        "decorations": false,
-        "transparent": true,
-        "shadow": true,
-        "resizable": false,
-        "skipTaskbar": true,
-        "alwaysOnTop": true,
-        "focus": true,
-        "center": false
+        "center": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --renderer-process-limit=1"
       }
     ],
     "security": {

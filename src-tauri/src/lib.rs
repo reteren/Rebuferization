@@ -1,8 +1,9 @@
 //! Rebuffer — persistent clipboard history for Windows.
 //!
 //! Three long-lived pieces share one process: the message-loop thread that owns
-//! the hidden clipboard-listener window, the store, and two pre-created
-//! WebView2 windows. See `docs/SPEC.md` §1.
+//! the hidden clipboard-listener window, the store, and the pre-created popup
+//! WebView2 window. The settings and tray-menu windows are built on demand and
+//! destroyed again when idle. See `docs/SPEC.md` §1.
 //!
 //! OWNER: the coordinator. Workers add to their own modules, not here.
 
@@ -213,14 +214,17 @@ pub fn run() {
                 Err(e) => tracing::error!("could not register hotkey {}: {e}", chord.to_display()),
             }
 
-            // Both windows are created hidden in tauri.conf.json; showing one
-            // later costs a few milliseconds instead of the 300-600 ms a fresh
-            // WebView2 would.
-            for label in [window::POPUP_LABEL, window::SETTINGS_LABEL] {
-                if let Some(w) = handle.get_webview_window(label) {
-                    let _ = window::apply_backdrop(&w);
-                }
+            // The popup is the only window created up front, and it is the
+            // only one worth the resident memory: it is what the hotkey opens
+            // and it has to be instant. Settings and the tray menu are built
+            // on demand and get their backdrop then (see window::mod).
+            if let Some(w) = handle.get_webview_window(window::POPUP_LABEL) {
+                let _ = window::apply_backdrop(&w);
             }
+
+            // A tray app is idle nearly all of the time; give the resident
+            // pages back to Windows while nothing of ours is on screen.
+            window::memory::start_idle_pass(&handle);
 
             tray::install(&handle)?;
 

@@ -2,16 +2,18 @@
 //!
 //! OWNER: worker W3.
 
+pub mod memory;
 pub mod paste;
 pub mod position;
 pub mod vibrancy;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use tauri::webview::PageLoadEvent;
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -26,6 +28,37 @@ use crate::AppState;
 pub const POPUP_LABEL: &str = "popup";
 pub const SETTINGS_LABEL: &str = "settings";
 pub const TRAYMENU_LABEL: &str = "traymenu";
+
+/// The WebView2 command line every one of our windows is created with.
+///
+/// `--renderer-process-limit=1` asks Chromium to keep one renderer instead of
+/// one per window. It does not fully deliver that, and it is worth being
+/// precise about why: it is an internal Chromium testing switch, not a
+/// supported WebView2 API, and two things keep extra renderers alive anyway —
+/// Chromium holds a warm spare renderer ready for the next navigation, and a
+/// window created while an earlier renderer is still initialising cannot bind
+/// to it and gets its own. Measured here: 10 processes and 192.4 MB became 9
+/// and 181.3 MB. One process, not two, and the exact number is timing
+/// dependent. Being unsupported, a future WebView2 may ignore it; that is a
+/// benign failure, we simply get the extra renderer back.
+///
+/// The rest is not optional decoration. Setting additional browser arguments
+/// *replaces* the string wry passes by default (wry 0.55.1 only builds its
+/// default when none was supplied), so wry's own
+/// `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` (the
+/// WebView2 "mini menu" and SmartScreen) has to be repeated here or it would
+/// silently come back.
+///
+/// Every window must pass this same string, and that is a hard requirement
+/// rather than tidiness. WebView2 runs one browser process per user-data
+/// folder and fixes its arguments when that process starts; a second
+/// environment on the same folder asking for different arguments fails with
+/// `ERROR_INVALID_STATE` (0x8007139F). Since the popup is declared in
+/// tauri.conf.json and the other two are built here, a divergence between the
+/// two spellings would not be a cosmetic bug — settings and the tray menu
+/// would stop opening entirely. `browser_args_match_the_manifest` guards it.
+pub const BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --renderer-process-limit=1";
 
 /// True while the popup is inside Windows' modal move/size loop (a resize
 /// drag). Dragging a window's edge can transiently deactivate it, and the
@@ -280,29 +313,348 @@ fn hide_popup_impl(app: &AppHandle, restore: bool) -> AppResult<()> {
     if was_visible && restore {
         paste::restore_foreground_window();
     }
+    if was_visible {
+        // Not immediately: a hide is very often followed by another show
+        // (Win+V toggling, a paste that reopens), and trimming pages we are
+        // about to fault straight back in would be pure cost.
+        memory::schedule_trim(app, Duration::from_secs(5));
+    }
     Ok(())
 }
 
-/// True when `hwnd` is one of our own windows (the popup or the settings
-/// window), which must never be treated as a paste target.
+/// True when `hwnd` is one of our own windows, which must never be treated as
+/// a paste target — SPEC 5.4 calls pasting into ourselves the destructive
+/// case. All three labels belong here, the tray menu included: it takes focus
+/// when it opens, so a show that happened while it was frontmost would
+/// otherwise cache it as the window to paste into. A lazily built window that
+/// does not currently exist simply matches nothing.
 fn is_own_window(app: &AppHandle, hwnd: HWND) -> bool {
-    [POPUP_LABEL, SETTINGS_LABEL].iter().any(|label| {
-        app.get_webview_window(label)
-            .and_then(|w| w.hwnd().ok())
-            .is_some_and(|own| own == hwnd)
-    })
+    [POPUP_LABEL, SETTINGS_LABEL, TRAYMENU_LABEL]
+        .iter()
+        .any(|label| {
+            app.get_webview_window(label)
+                .and_then(|w| w.hwnd().ok())
+                .is_some_and(|own| own == hwnd)
+        })
 }
 
-/// Centers the settings window on the cursor's monitor and shows it.
+/// A window that is built the first time it is needed and destroyed again
+/// once it has been idle long enough.
+///
+/// The settings and tray-menu webviews used to be declared in tauri.conf.json
+/// and created hidden at startup. That made them instant to open and cost
+/// ~28 MB of resident memory for the whole life of a process that sits idle in
+/// the tray almost all of the time. They are built on demand now, and torn
+/// down again afterwards so the saving does not evaporate the first time the
+/// user opens settings.
+struct Lazy {
+    label: &'static str,
+    /// Bumped on every show. A pending destroy carries the generation it was
+    /// scheduled under and gives up when it no longer matches — that is how a
+    /// show cancels a teardown that was already in flight.
+    generation: AtomicU64,
+    /// True between "the window was built" and "its page has painted". The
+    /// reveal is deferred to the page-load hook, and this says one is owed.
+    pending_show: AtomicBool,
+    /// At most one idle timer per window, however often it is hidden.
+    timer: AtomicBool,
+    /// True while a build of this window is in flight. Claiming it is how two
+    /// concurrent shows agree on which one builds; see `get_or_build`.
+    building: AtomicBool,
+    /// How long the window may sit hidden before it is destroyed, or `None`
+    /// for a window that is built once and then kept for the life of the
+    /// process. Keeping one is not free, but after a working-set trim a hidden
+    /// renderer costs about a megabyte, and rebuilding costs 300-600 ms the
+    /// next time the user asks for it — which is the wrong trade for anything
+    /// that has to feel instant.
+    idle: Option<Duration>,
+    /// Positions, shows and focuses the window. Runs once the page is ready.
+    reveal: fn(&WebviewWindow) -> AppResult<()>,
+}
+
+/// Settings is a whole window the user works in — the largest of the three
+/// renderers — and it is opened rarely. Five minutes is long enough that
+/// coming back to it during one sitting is still instant, and taking 400 ms to
+/// open a settings window is unremarkable.
+static SETTINGS: Lazy = Lazy {
+    label: SETTINGS_LABEL,
+    generation: AtomicU64::new(0),
+    pending_show: AtomicBool::new(false),
+    timer: AtomicBool::new(false),
+    building: AtomicBool::new(false),
+    idle: Some(Duration::from_secs(300)),
+    reveal: reveal_settings,
+};
+
+/// The tray menu is built on demand but never torn down again.
+///
+/// Tearing it down was tried and reverted. Measured: once the working set has
+/// been trimmed the hidden tray-menu renderer holds about 1.3 MB, while
+/// rebuilding it costs 300-600 ms — paid on a right-click, on a menu whose
+/// entire job is to appear immediately. A megabyte does not buy half a second
+/// of lag on the one window that must feel instant. Lazy creation is still
+/// worth keeping: a user who never opens the menu never pays for it at all.
+static TRAY_MENU: Lazy = Lazy {
+    label: TRAYMENU_LABEL,
+    generation: AtomicU64::new(0),
+    pending_show: AtomicBool::new(false),
+    timer: AtomicBool::new(false),
+    building: AtomicBool::new(false),
+    idle: None,
+    reveal: reveal_tray_menu,
+};
+
+/// Looks the window up and builds it if it is not there.
+///
+/// Returns the window when it already existed, so the caller reveals it
+/// immediately; returns `None` when a build was started or is already running,
+/// in which case the builder's page-load hook (or `arm_reveal_fallback`) does
+/// the revealing once there is something painted to show.
+///
+/// Two concurrent triggers — a double right-click on the tray icon, or the
+/// tray menu's Settings entry while the tray icon is clicked again — would
+/// otherwise both see `get_webview_window` return `None`, both build, and the
+/// second `WebviewWindowBuilder::build` would fail with
+/// `WindowLabelAlreadyExists`. `building` is claimed with a single swap so
+/// exactly one of them proceeds.
+///
+/// Deliberately NOT a mutex. Creating a window has to happen on the event loop
+/// thread, so `build` called from a command thread blocks until the main
+/// thread services it. A main thread that meanwhile blocked on a mutex held by
+/// that command thread would never service anything, and the app would hang —
+/// the same trap the `SHOW_LOCK` comment describes. An atomic claim never
+/// makes a thread wait for another, so there is nothing to deadlock on: the
+/// loser simply returns and lets the winner finish.
+fn get_or_build(
+    lazy: &'static Lazy,
+    app: &AppHandle,
+    build: fn(&AppHandle) -> AppResult<WebviewWindow>,
+) -> AppResult<Option<WebviewWindow>> {
+    if let Some(win) = app.get_webview_window(lazy.label) {
+        return Ok(Some(win));
+    }
+    if lazy.building.swap(true, Ordering::SeqCst) {
+        // Someone else is building it right now and owes the reveal.
+        return Ok(None);
+    }
+    // Re-check now that the build slot is ours: the window may have been
+    // finished between our look-up above and this claim.
+    if let Some(win) = app.get_webview_window(lazy.label) {
+        lazy.building.store(false, Ordering::SeqCst);
+        return Ok(Some(win));
+    }
+    lazy.pending_show.store(true, Ordering::SeqCst);
+    let built = build(app);
+    lazy.building.store(false, Ordering::SeqCst);
+    match built {
+        Ok(win) => {
+            arm_reveal_fallback(lazy, &win);
+            Ok(None)
+        }
+        Err(e) => {
+            // Nothing will ever reveal it now; drop the debt so a later show
+            // is not mistaken for one already owed.
+            lazy.pending_show.store(false, Ordering::SeqCst);
+            Err(e)
+        }
+    }
+}
+
+impl Lazy {
+    /// Records that the window is on screen, cancelling any pending destroy.
+    fn shown(&'static self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Starts the idle countdown. A show during the wait restarts it. A window
+    /// with no idle period is kept for good, so there is nothing to count.
+    fn hidden(&'static self, app: &AppHandle) {
+        let Some(idle) = self.idle else {
+            return;
+        };
+        if self.timer.swap(true, Ordering::SeqCst) {
+            // A countdown is already running; it re-reads the generation on
+            // every lap, so it notices this hide by itself.
+            return;
+        }
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let generation = loop {
+                let generation = self.generation.load(Ordering::SeqCst);
+                std::thread::sleep(idle);
+                if self.generation.load(Ordering::SeqCst) == generation {
+                    break generation;
+                }
+                // Shown again while we waited: start the idle stretch over.
+            };
+            self.timer.store(false, Ordering::SeqCst);
+            let handle = app.clone();
+            // Windows destroys a window on the thread that owns it, which is
+            // the main thread; doing it from here would be undefined.
+            if let Err(e) = app.run_on_main_thread(move || {
+                destroy_if_idle(self, &handle, generation);
+            }) {
+                tracing::debug!("{}: could not reach the main thread: {e}", self.label);
+            }
+        });
+    }
+}
+
+/// Destroys the window if nothing has happened to it since the countdown
+/// started. Main thread only.
+fn destroy_if_idle(lazy: &'static Lazy, app: &AppHandle, generation: u64) {
+    if lazy.generation.load(Ordering::SeqCst) != generation {
+        return;
+    }
+    let Some(win) = app.get_webview_window(lazy.label) else {
+        return;
+    };
+    // A show is owed: the window was built moments ago and is waiting for its
+    // page-load hook, with `arm_reveal_fallback` asleep holding a clone of it.
+    // Destroying now would leave that fallback to reveal a dead window.
+    if lazy.pending_show.load(Ordering::SeqCst) {
+        return;
+    }
+    // Never destroy a window the user is looking at. A visibility read that
+    // fails is treated as "visible": leaving the memory in place is always the
+    // safe answer.
+    if win.is_visible().unwrap_or(true) {
+        return;
+    }
+    // `close()` would go through the CloseRequested handler, which exists
+    // precisely to refuse it; `destroy()` is the one that actually takes the
+    // renderer process down with it.
+    match win.destroy() {
+        Ok(()) => {
+            tracing::debug!("{} destroyed after {:?} idle", lazy.label, lazy.idle);
+            // The renderer needs a moment to exit before there is anything to
+            // reclaim.
+            memory::schedule_trim(app, Duration::from_secs(2));
+        }
+        Err(e) => tracing::debug!("{} could not be destroyed: {e}", lazy.label),
+    }
+}
+
+/// How long to wait for a freshly built window to report a finished page load
+/// before showing it regardless.
+const REVEAL_TIMEOUT: Duration = Duration::from_millis(2000);
+
+/// A lazily built window is revealed from its page-load hook. If that never
+/// arrives the window would sit there built and hidden, and the click that
+/// asked for it would look ignored — so show it anyway after a moment.
+fn arm_reveal_fallback(lazy: &'static Lazy, win: &WebviewWindow) {
+    let win = win.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(REVEAL_TIMEOUT);
+        if !lazy.pending_show.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        tracing::warn!(
+            "{} never reported a finished page load; showing it anyway",
+            lazy.label
+        );
+        if let Err(e) = (lazy.reveal)(&win) {
+            tracing::error!("{} could not be shown: {e}", lazy.label);
+        }
+    });
+}
+
+/// Runs from the page-load hook of a lazily built window: shows it if a show
+/// is owed, and does nothing on any later navigation.
+fn reveal_when_loaded(lazy: &'static Lazy, win: &WebviewWindow, event: PageLoadEvent) {
+    if event != PageLoadEvent::Finished || !lazy.pending_show.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    if let Err(e) = (lazy.reveal)(win) {
+        tracing::error!("{} could not be shown: {e}", lazy.label);
+    }
+}
+
+/// The settings window, built if it is not there.
+///
+/// The properties are the ones tauri.conf.json declared for it before it
+/// became lazy — the same title, size and minimum size, and the same
+/// undecorated, transparent, shadowed, taskbar-less window.
+fn ensure_settings(app: &AppHandle) -> AppResult<WebviewWindow> {
+    if let Some(win) = app.get_webview_window(SETTINGS_LABEL) {
+        return Ok(win);
+    }
+    let win =
+        WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App("settings.html".into()))
+            .title("Rebuffer — Settings")
+            .inner_size(960.0, 660.0)
+            .min_inner_size(720.0, 520.0)
+            .visible(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(true)
+            .resizable(true)
+            .center()
+            .skip_taskbar(true)
+            .additional_browser_args(BROWSER_ARGS)
+            .on_page_load(|win, payload| reveal_when_loaded(&SETTINGS, &win, payload.event()))
+            .build()
+            .map_err(tauri_err)?;
+    apply_backdrop(&win)?;
+    Ok(win)
+}
+
+/// The tray-menu window, built if it is not there. Again the properties the
+/// JSON declared: a fixed 210x132, always on top, focused, no taskbar button.
+fn ensure_tray_menu(app: &AppHandle) -> AppResult<WebviewWindow> {
+    if let Some(win) = app.get_webview_window(TRAYMENU_LABEL) {
+        return Ok(win);
+    }
+    let win =
+        WebviewWindowBuilder::new(app, TRAYMENU_LABEL, WebviewUrl::App("traymenu.html".into()))
+            .title("Rebuffer menu")
+            .inner_size(210.0, 132.0)
+            .visible(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(true)
+            .resizable(false)
+            .skip_taskbar(true)
+            .always_on_top(true)
+            .focused(true)
+            .additional_browser_args(BROWSER_ARGS)
+            .on_page_load(|win, payload| reveal_when_loaded(&TRAY_MENU, &win, payload.event()))
+            .build()
+            .map_err(tauri_err)?;
+    apply_backdrop(&win)?;
+    Ok(win)
+}
+
+/// Where the tray menu should appear, captured when the right-click happened.
+/// A window that has to be built first is revealed a few hundred milliseconds
+/// later, and by then the pointer is often already moving toward where the
+/// menu is about to be; placing it at the cursor *then* would make the menu
+/// jump away from the click that asked for it.
+static TRAYMENU_ORIGIN: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+
 /// Shows the tray menu at the cursor. It is our own window rather than a
 /// native one because a native HMENU cannot be themed: Windows paints it, and
 /// no amount of CSS reaches it. The cost is that dismissal, sizing and
 /// placement are ours to handle.
 pub fn show_tray_menu(app: &AppHandle) -> AppResult<()> {
-    let win = app
-        .get_webview_window(TRAYMENU_LABEL)
-        .ok_or_else(|| AppError::Other("tray menu window missing".into()))?;
-    position::place_at_cursor(&win)?;
+    let at = position::cursor_pos()?;
+    *TRAYMENU_ORIGIN.lock().unwrap_or_else(|e| e.into_inner()) = Some((at.x, at.y));
+
+    // A window that has to be built is left hidden and shown from its
+    // page-load hook: an empty transparent window at the cursor would be a
+    // hole in the screen until the menu painted itself.
+    match get_or_build(&TRAY_MENU, app, ensure_tray_menu)? {
+        Some(win) => reveal_tray_menu(&win),
+        None => Ok(()),
+    }
+}
+
+fn reveal_tray_menu(win: &WebviewWindow) -> AppResult<()> {
+    TRAY_MENU.shown();
+    match *TRAYMENU_ORIGIN.lock().unwrap_or_else(|e| e.into_inner()) {
+        Some((x, y)) => position::place_at(win, POINT { x, y })?,
+        None => position::place_at_cursor(win)?,
+    }
     win.show().map_err(tauri_err)?;
     win.set_focus().map_err(tauri_err)?;
     Ok(())
@@ -310,16 +662,30 @@ pub fn show_tray_menu(app: &AppHandle) -> AppResult<()> {
 
 pub fn hide_tray_menu(app: &AppHandle) -> AppResult<()> {
     if let Some(win) = app.get_webview_window(TRAYMENU_LABEL) {
-        win.hide().map_err(tauri_err)?;
+        // Only a window that was actually on screen has been hidden by this
+        // call. Arming the idle countdown from an already-hidden window — a
+        // second dismissal, or an event that `destroy()` itself emits — would
+        // keep restarting a timer against a window nobody touched.
+        if win.is_visible().unwrap_or(false) {
+            win.hide().map_err(tauri_err)?;
+            TRAY_MENU.hidden(app);
+        }
     }
     Ok(())
 }
 
+/// Centers the settings window on the cursor's monitor and shows it, building
+/// it first if it is not currently around.
 pub fn show_settings(app: &AppHandle) -> AppResult<()> {
-    let win = app
-        .get_webview_window(SETTINGS_LABEL)
-        .ok_or_else(|| AppError::Other("settings window not found".into()))?;
-    position::center_on_cursor_monitor(&win)?;
+    match get_or_build(&SETTINGS, app, ensure_settings)? {
+        Some(win) => reveal_settings(&win),
+        None => Ok(()),
+    }
+}
+
+fn reveal_settings(win: &WebviewWindow) -> AppResult<()> {
+    SETTINGS.shown();
+    position::center_on_cursor_monitor(win)?;
     win.show().map_err(tauri_err)?;
     // After the show, not before: showing the window puts WS_EX_APPWINDOW back,
     // so setting the style once at startup was undone every time.
@@ -328,7 +694,7 @@ pub fn show_settings(app: &AppHandle) -> AppResult<()> {
     // window to apply the change, and the deactivation that causes was read by
     // the dismissal below as the user clicking away — the settings window shut
     // itself the moment it opened.
-    keep_out_of_taskbar(&win);
+    keep_out_of_taskbar(win);
     *SETTINGS_SHOWN_AT.lock().unwrap() = Some(Instant::now());
     win.set_focus().map_err(tauri_err)?;
     Ok(())
@@ -349,18 +715,6 @@ fn foreground_is_ours() -> bool {
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     pid != 0 && pid == unsafe { GetCurrentProcessId() }
 }
-
-/// Wired once, at startup. Two things the settings window got wrong:
-///
-/// Closing it destroyed the webview, and every later "open settings" then
-/// looked up a window that no longer existed and failed — settings could not
-/// be reopened at all until the app was restarted. Hiding instead keeps the
-/// window alive, which is also what makes reopening instant.
-///
-/// And it stayed open behind whatever the user switched to. Losing focus is
-/// the dismissal signal, exactly as it is for the popup, except that our own
-/// file dialogs must not count as losing it.
-static SETTINGS_WIRED: AtomicBool = AtomicBool::new(false);
 
 /// When the settings window was last shown. Focus settles over a few frames —
 /// the popup is still hiding, the shell is still handing activation over — and
@@ -392,21 +746,47 @@ fn keep_out_of_taskbar(window: &WebviewWindow) {
     }
 }
 
+/// Wired once per settings window, from `apply_backdrop` — which is to say
+/// once per `ensure_settings`, on the instance it just built. This is
+/// deliberately not a process-wide once-guard: the window is destroyed after
+/// it has been idle, and a rebuilt one that inherited nothing would be
+/// undismissable and unclosable.
+///
+/// Two things the settings window got wrong before this existed:
+///
+/// Closing it destroyed the webview, and every later "open settings" then
+/// looked up a window that no longer existed and failed — settings could not
+/// be reopened at all until the app was restarted. Hiding instead keeps the
+/// window alive for as long as it is worth keeping (`Lazy`), and rebuilding is
+/// what happens after that.
+///
+/// And it stayed open behind whatever the user switched to. Losing focus is
+/// the dismissal signal, exactly as it is for the popup, except that our own
+/// file dialogs must not count as losing it.
 fn wire_settings_dismissal(window: &WebviewWindow) {
-    if SETTINGS_WIRED.swap(true, Ordering::SeqCst) {
-        return;
-    }
     let win = window.clone();
+    let app = window.app_handle().clone();
     window.on_window_event(move |event| match event {
         WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
-            let _ = win.hide();
+            hide_settings(&win, &app);
         }
         WindowEvent::Focused(false) if !foreground_is_ours() && !settling_after_show() => {
-            let _ = win.hide();
+            hide_settings(&win, &app);
         }
         _ => {}
     });
+}
+
+/// Hides the settings window and starts its idle countdown. A window that is
+/// already hidden is left alone: destroying one emits its own events, and
+/// re-arming the countdown from those would keep a dead label alive forever.
+fn hide_settings(win: &WebviewWindow, app: &AppHandle) {
+    if !win.is_visible().unwrap_or(false) {
+        return;
+    }
+    let _ = win.hide();
+    SETTINGS.hidden(app);
 }
 
 /// Applies acrylic on Windows 11, falling back to a flat background on
@@ -452,4 +832,33 @@ pub fn apply_backdrop(window: &WebviewWindow) -> AppResult<()> {
 
 fn tauri_err(e: tauri::Error) -> AppError {
     AppError::Other(e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn browser_args_in_tauri_conf_must_match_window_mod_constant_to_prevent_webview2_failure() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let conf_path = manifest_dir.join("tauri.conf.json");
+        let raw = std::fs::read_to_string(&conf_path)
+            .or_else(|_| std::fs::read_to_string("tauri.conf.json"))
+            .or_else(|_| std::fs::read_to_string("../tauri.conf.json"))
+            .expect("tauri.conf.json must exist and be readable at test time");
+
+        let val: serde_json::Value =
+            serde_json::from_str(&raw).expect("tauri.conf.json must be valid JSON");
+        let from_conf = val["app"]["windows"][0]["additionalBrowserArgs"]
+            .as_str()
+            .expect(
+            "app.windows[0].additionalBrowserArgs must be present as a string in tauri.conf.json",
+        );
+
+        assert_eq!(
+            from_conf, BROWSER_ARGS,
+            "browser arguments in tauri.conf.json (app.windows[0].additionalBrowserArgs) and window::BROWSER_ARGS must match exactly. A mismatch causes WebView2 to fail to create secondary windows in the same user data folder."
+        );
+    }
 }

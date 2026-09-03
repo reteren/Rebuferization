@@ -742,30 +742,31 @@ fn test_sweep_clears_missing_thumb_without_losing_the_item() {
     cap.preview_text = None;
     let item = store.insert_capture(cap).unwrap();
 
-    let before = store.get(item.id).unwrap();
-    assert!(
-        before.thumb_url.is_some(),
-        "the fixture needs a thumbnail to remove"
-    );
-
     // Thumbnails are encoded on a background worker, so wait for the file to
-    // exist before removing it — deleting first only races the writer and
+    // exist and the row to be updated before removing it — deleting first only races the writer and
     // proves nothing.
     let thumbs = dir.path().join("blobs").join("thumbs");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let present = std::fs::read_dir(&thumbs)
-            .map(|rd| rd.flatten().count())
-            .unwrap_or(0);
-        if present > 0 {
-            break;
+    let before = loop {
+        let fresh = store.get(item.id).unwrap();
+        if fresh.thumb_url.is_some() {
+            let present = std::fs::read_dir(&thumbs)
+                .map(|rd| rd.flatten().count())
+                .unwrap_or(0);
+            if present > 0 {
+                break fresh;
+            }
         }
         assert!(
             std::time::Instant::now() < deadline,
             "the thumbnail worker never wrote a file"
         );
         std::thread::sleep(std::time::Duration::from_millis(25));
-    }
+    };
+    assert!(
+        before.thumb_url.is_some(),
+        "the fixture needs a thumbnail to remove"
+    );
 
     // Now remove it behind the store's back, as a prune or a crash between the
     // blob write and the thumbnail write would.
