@@ -304,6 +304,9 @@ mod tests {
                 width: 1100,
                 height: 700,
             },
+            // Explicit rather than defaulted: the bar ships on, and this test
+            // is about what each state costs, not about which one is default.
+            drag_bar: false,
             ..WindowSettings::default()
         };
 

@@ -249,6 +249,7 @@ mod tests {
                 "dashlane.exe".into(),
                 "protonpass.exe".into(),
             ],
+            link_previews: false,
         }
     }
 
@@ -356,6 +357,7 @@ mod tests {
                 r"C:\Program Files\1Password\1password.exe".into(),
                 "  KeePassXC.EXE  ".into(),
             ],
+            link_previews: false,
         };
 
         assert!(should_skip(&flags, Some("1password.exe"), &settings));

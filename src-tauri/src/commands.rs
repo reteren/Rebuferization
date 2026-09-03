@@ -267,6 +267,21 @@ pub fn update_settings(
             });
     }
 
+    if next.privacy.link_previews != before.privacy.link_previews {
+        state.store.set_link_previews(next.privacy.link_previews);
+        // Switching it on is the user asking for previews, not just for
+        // previews from here on: the links already in history are looked up
+        // too. Failures are the lookup's business, so this never blocks the
+        // save.
+        if next.privacy.link_previews {
+            match state.store.backfill_link_previews() {
+                Ok(n) if n > 0 => tracing::info!("looking up {n} link(s) already in history"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("could not queue existing links: {e}"),
+            }
+        }
+    }
+
     let _ = app.emit(events::SETTINGS_CHANGED, &next);
     Ok(next)
 }

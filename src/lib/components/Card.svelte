@@ -60,14 +60,27 @@
     other: 'BIN',
   }
 
-  // The label follows the item's KIND, not its file extension: a link card is
-  // LINK no matter what ext it would save as, a colour swatch is COLOR (the hex
-  // already sits in the chip), and code is CODE. `ext` itself is untouched so
-  // Save-as still produces the right filename.
+  const domain = $derived.by(() => {
+    if (item.subKind !== 'link' || !item.previewText) return null
+    try {
+      return new URL(item.previewText).hostname.replace(/^www\./, '')
+    } catch {
+      return item.previewText
+    }
+  })
+
+  // The label follows the item's KIND, not its file extension: a colour swatch
+  // is COLOR (the hex already sits in the chip) and code is CODE, whatever ext
+  // they would save as. `ext` itself is untouched so Save-as still produces the
+  // right filename.
+  //
+  // A link names its site rather than saying LINK: which site a link goes to is
+  // the one thing worth knowing about it at a glance, and "LINK" was already
+  // obvious from the card. LINK survives only for a URL that will not parse.
   const formatLabel = $derived.by(() => {
     switch (item.subKind) {
       case 'link':
-        return 'LINK'
+        return domain ?? 'LINK'
       case 'color':
         return 'COLOR'
       case 'code':
@@ -91,15 +104,6 @@
   const labelFont = $derived(
     formatLabelSize === 'large' ? 'var(--fs-lg)' : formatLabelSize === 'medium' ? 'var(--fs-sm)' : 'var(--fs-2xs)',
   )
-
-  const domain = $derived.by(() => {
-    if (item.subKind !== 'link' || !item.previewText) return null
-    try {
-      return new URL(item.previewText).hostname.replace(/^www\./, '')
-    } catch {
-      return item.previewText
-    }
-  })
 
   const domainHue = $derived.by(() => {
     const s = domain ?? 'rebuffer'
@@ -183,11 +187,29 @@
       </span>
     {:else if item.kind === 'text'}
       {#if item.subKind === 'link'}
-        <div class="link-preview">
-          <span class="favicon" style="--fav-hue:{domainHue}">{domain ? (domain[0]?.toUpperCase() ?? '?') : '•'}</span>
-          <span class="domain">{domain ?? item.previewText}</span>
-          {#if item.title}<span class="link-title">{item.title}</span>{/if}
-        </div>
+        <!-- A link that was looked up (privacy.linkPreviews) has the page's
+             own picture and name, so it is shown the way the page would show
+             itself. Without the lookup, and for every link copied while the
+             setting was off, the generated-monogram card below is unchanged. -->
+        {#if showThumb}
+          <div class="link-rich">
+            <img class="thumb" src={imgSrc!} alt="" draggable="false" decoding="async" onerror={onImgError} />
+            <div class="link-caption">
+              <span class="link-name">{item.title ?? domain ?? item.previewText}</span>
+            </div>
+          </div>
+        {:else}
+          <div class="link-preview">
+            <span class="favicon" style="--fav-hue:{domainHue}">{domain ? (domain[0]?.toUpperCase() ?? '?') : '•'}</span>
+            <!-- The badge below already names the site, so saying it again in
+                 the middle of the card is noise — except when the badge is
+                 switched off, where this is the only thing that would. -->
+            {#if formatLabelSize === 'off'}
+              <span class="domain">{domain ?? item.previewText}</span>
+            {/if}
+            {#if item.title}<span class="link-title">{item.title}</span>{/if}
+          </div>
+        {/if}
       {:else if item.subKind === 'color'}
         <div class="color-preview" style="background:{item.previewText ?? 'var(--swatch-empty)'}">
           <span class="color-chip">{item.previewText}</span>
@@ -456,6 +478,43 @@
     box-shadow: var(--shadow-1);
   }
 
+  .link-rich {
+    position: absolute;
+    inset: 0;
+  }
+
+  /* The name sits on the picture rather than beside it, because the tile is
+     116px wide at the default zoom and splitting it would leave room for
+     neither. The scrim is --scrim-1, the one token that is dark in every
+     theme including the light ones, so white text over it is always legible.
+     The hostname is not repeated here: the picture and the name already say
+     where this goes, the badge says LINK, and the full address is one
+     right-click away. Two lines of caption over a 154px tile is enough. */
+  .link-caption {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    /* Bottom padding is the format badge's row, so the caption stops above
+       LINK rather than running under it. */
+    padding: 16px 7px 26px;
+    background: linear-gradient(to top, var(--scrim-1) 0%, var(--scrim-1) 58%, transparent 100%);
+    pointer-events: none;
+  }
+
+  .link-name {
+    display: -webkit-box;
+    color: var(--text-bright);
+    font-size: var(--fs-2xs);
+    font-weight: 620;
+    line-height: 1.3;
+    overflow: hidden;
+    line-clamp: 2;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow-wrap: anywhere;
+  }
+
   .domain {
     max-width: 100%;
     overflow: hidden;
@@ -579,6 +638,11 @@
   .fmt {
     bottom: 6px;
     left: 6px;
+    /* A hostname is longer than PNG and can be longer than the tile is wide. */
+    max-width: calc(100% - 12px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
     font-size: var(--label-fs);
     font-weight: 650;
     letter-spacing: 0.05em;

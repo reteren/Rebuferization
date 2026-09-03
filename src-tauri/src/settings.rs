@@ -62,8 +62,9 @@ pub struct WindowSettings {
     /// 1..=5.
     pub zoom_step: u32,
     /// An empty strip along the top of the popup that the window can be
-    /// dragged by. Off by default. It is added *on top of* the configured
-    /// size, so turning it on never costs the grid any room.
+    /// dragged by. It is added *on top of* the configured size, so it never
+    /// costs the grid any room, which is why it is on by default: a window
+    /// with no titlebar that cannot be moved is a window that is stuck.
     pub drag_bar: bool,
 }
 
@@ -105,6 +106,11 @@ pub struct AppearanceSettings {
 pub struct PrivacySettings {
     pub respect_clipboard_flags: bool,
     pub blocked_processes: Vec<String>,
+    /// Whether a copied link may be looked up at the site that owns it, to
+    /// give the card the page's real name instead of a bare hostname. On by
+    /// the owner's decision, and still filed under privacy: it is the only
+    /// thing in the app that sends anything anywhere.
+    pub link_previews: bool,
 }
 
 impl Default for Settings {
@@ -149,7 +155,7 @@ impl Default for WindowSettings {
             percent_of_monitor: 40,
             fixed: FixedSize::default(),
             zoom_step: 3,
-            drag_bar: false,
+            drag_bar: true,
         }
     }
 }
@@ -202,6 +208,7 @@ impl Default for PrivacySettings {
                 "dashlane.exe".into(),
                 "protonpass.exe".into(),
             ],
+            link_previews: true,
         }
     }
 }
@@ -358,6 +365,7 @@ fn sanitize_json(v: &mut Value) {
 
     sanitize_section(root, "privacy", |o| {
         require_bool(o, "respectClipboardFlags");
+        require_bool(o, "linkPreviews");
         match o.get_mut("blockedProcesses") {
             Some(Value::Array(items)) => items.retain(Value::is_string),
             _ => {
@@ -1068,23 +1076,71 @@ mod tests {
         );
     }
 
+    /// The one setting that lets the app talk to anyone. On by default, so an
+    /// upgrade opts in — but a user who switches it off must have it stay off
+    /// across a restart, and junk must not read as consent.
     #[test]
-    fn the_drag_bar_is_off_until_asked_for_and_then_persists() {
+    fn link_previews_default_on_and_a_refusal_sticks() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("settings.json");
         let store = SettingsStore::load(&path).expect("load");
-        assert!(!store.get().window.drag_bar, "off unless the user asks");
+        assert!(store.get().privacy.link_previews, "on out of the box");
 
+        // Switching it off is the one answer that must never be quietly undone.
         let patched = store
-            .patch(json!({ "window": { "dragBar": true } }))
+            .patch(json!({ "privacy": { "linkPreviews": false } }))
             .expect("patch");
-        assert!(patched.window.drag_bar);
+        assert!(!patched.privacy.link_previews);
         let on_disk: Value =
             serde_json::from_slice(&fs::read(&path).expect("file exists")).expect("valid json");
-        assert_eq!(on_disk["window"]["dragBar"], true);
+        assert_eq!(on_disk["privacy"]["linkPreviews"], false);
+        let reopened = SettingsStore::load(&path).expect("reload");
+        assert!(
+            !reopened.get().privacy.link_previews,
+            "a refusal survives a restart"
+        );
+
+        let old_path = dir.path().join("old.json");
+        fs::write(
+            &old_path,
+            br#"{"version":1,"privacy":{"respectClipboardFlags":false}}"#,
+        )
+        .expect("write");
+        let old = SettingsStore::load(&old_path).expect("load");
+        assert!(old.get().privacy.link_previews);
+        assert!(!old.get().privacy.respect_clipboard_flags);
+
+        let bad_path = dir.path().join("bad.json");
+        fs::write(
+            &bad_path,
+            br#"{"version":1,"privacy":{"linkPreviews":"sure","respectClipboardFlags":false}}"#,
+        )
+        .expect("write");
+        let bad = SettingsStore::load(&bad_path).expect("load");
+        assert!(bad.get().privacy.link_previews, "junk is not a refusal");
+        assert!(
+            !bad.get().privacy.respect_clipboard_flags,
+            "one bad field costs no other"
+        );
+    }
+
+    #[test]
+    fn the_drag_bar_is_on_by_default_and_can_be_switched_off() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        let store = SettingsStore::load(&path).expect("load");
+        assert!(store.get().window.drag_bar, "on unless the user says no");
+
+        let patched = store
+            .patch(json!({ "window": { "dragBar": false } }))
+            .expect("patch");
+        assert!(!patched.window.drag_bar);
+        let on_disk: Value =
+            serde_json::from_slice(&fs::read(&path).expect("file exists")).expect("valid json");
+        assert_eq!(on_disk["window"]["dragBar"], false);
 
         // A settings.json written before the setting existed must still load,
-        // with the bar off — that is every existing install.
+        // and picks up the default like any other missing field.
         let old_path = dir.path().join("old.json");
         fs::write(
             &old_path,
@@ -1092,7 +1148,7 @@ mod tests {
         )
         .expect("write");
         let old = SettingsStore::load(&old_path).expect("load");
-        assert!(!old.get().window.drag_bar);
+        assert!(old.get().window.drag_bar);
         assert_eq!(old.get().window.size_mode, "fixed");
 
         // And a nonsense value falls back rather than costing the whole section.
@@ -1103,7 +1159,7 @@ mod tests {
         )
         .expect("write");
         let bad = SettingsStore::load(&bad_path).expect("load");
-        assert!(!bad.get().window.drag_bar);
+        assert!(bad.get().window.drag_bar);
         assert_eq!(
             bad.get().window.zoom_step,
             4,

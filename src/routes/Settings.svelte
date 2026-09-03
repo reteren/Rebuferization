@@ -927,6 +927,23 @@ function resetEverything(): void {
           the store becomes a plaintext password log.
         </p>
 
+        <label class="toggle">
+          <input
+            type="checkbox"
+            checked={settings.current.privacy.linkPreviews}
+            onchange={(e) => patch({ privacy: { linkPreviews: e.currentTarget.checked } })}
+          />
+          <span>Look up what a copied link points at</span>
+        </label>
+        <p class="hint">
+          A copied YouTube link gets the video's real name and its thumbnail instead of a bare
+          youtube.com. The lookup happens once, when the link is captured, and the result is
+          stored, so opening the window later contacts nobody. Switching this on also looks up
+          the YouTube links already in your history. Nothing else is looked up: only
+          youtube.com, youtu.be and youtube-nocookie.com are ever contacted, and only with the
+          link itself.
+        </p>
+
         <div class="field">
           <span class="field-label">Blocked processes</span>
           <p class="hint">Copies made while one of these processes is in the foreground are ignored.</p>

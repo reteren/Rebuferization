@@ -13,6 +13,7 @@ pub mod error;
 pub mod hotkey;
 pub mod logging;
 pub mod model;
+pub mod preview;
 pub mod settings;
 pub mod shell;
 pub mod store;
@@ -151,6 +152,14 @@ pub fn run() {
                 );
             }
 
+            // Without this the store holds no handle and every event it emits
+            // from a background thread is silently dropped: the thumbnailer's
+            // and the link lookup's "this row changed", and the janitor's
+            // prune and storage-warning notices. Nothing errors — the UI just
+            // never hears, and a card sits on its placeholder until something
+            // unrelated redraws it.
+            store.set_app_handle(handle.clone());
+
             // The store deliberately does not read settings.json, so without
             // this it runs on its defaults — 30 days and no size cap — and a
             // user who set either would never see it take effect.
@@ -158,6 +167,7 @@ pub fn run() {
                 retention_days: resolved.storage.retention_days,
                 max_store_bytes: resolved.storage.max_store_bytes.map(|b| b as i64),
             });
+            store.set_link_previews(resolved.privacy.link_previews);
 
             let emit_handle = handle.clone();
             let clipboard = Arc::new(ClipboardWatcher::start(

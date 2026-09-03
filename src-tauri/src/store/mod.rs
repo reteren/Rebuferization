@@ -23,8 +23,10 @@ use tauri::AppHandle;
 use crate::capture::Capture;
 use crate::error::{AppError, AppResult};
 use crate::model::{
-    CleanupResult, Facet, Filter, ItemDto, Kind, RetentionPolicy, Sort, StorageStats, TabCounts,
+    CleanupResult, Facet, Filter, ItemDto, Kind, RetentionPolicy, Sort, StorageStats, SubKind,
+    TabCounts,
 };
+use crate::preview;
 use crate::store::blobs::{
     compute_files_hash, compute_hash, compute_text_hash, write_blob, write_thumbnail,
 };
@@ -49,6 +51,16 @@ struct ThumbnailTask {
     pub root: PathBuf,
 }
 
+/// One captured link waiting to be looked up. Same shape and same reasoning as
+/// `ThumbnailTask`: the row exists and is on screen, and gains a title and a
+/// picture later, or never.
+struct LinkTask {
+    pub item_id: i64,
+    pub hash: String,
+    pub url: String,
+    pub root: PathBuf,
+}
+
 /// LOCK ORDERING:
 /// Always acquire `root` (read lock) BEFORE acquiring `conn` (mutex lock).
 /// Never acquire `root` while holding `conn`.
@@ -58,6 +70,12 @@ struct StoreInner {
     retention_policy: RwLock<RetentionPolicy>,
     app_handle: Mutex<Option<AppHandle>>,
     thumb_tx: Sender<ThumbnailTask>,
+    link_tx: Sender<LinkTask>,
+    /// `privacy.linkPreviews`. Pushed in from settings, like the retention
+    /// policy — the store does not read settings.json. Off means no link is
+    /// ever looked up, so the check belongs before the queue, not inside the
+    /// worker.
+    link_previews: AtomicBool,
     stop_janitor: AtomicBool,
 }
 
@@ -80,6 +98,7 @@ impl Store {
         let conn = db::open_database(&db_path)?;
 
         let (thumb_tx, thumb_rx) = channel::<ThumbnailTask>();
+        let (link_tx, link_rx) = channel::<LinkTask>();
 
         let inner = Arc::new(StoreInner {
             root: RwLock::new(root.to_path_buf()),
@@ -87,6 +106,8 @@ impl Store {
             retention_policy: RwLock::new(RetentionPolicy::default()),
             app_handle: Mutex::new(None),
             thumb_tx,
+            link_tx,
+            link_previews: AtomicBool::new(false),
             stop_janitor: AtomicBool::new(false),
         });
 
@@ -124,6 +145,59 @@ impl Store {
                             rusqlite::params![rel, task.item_id],
                         ) {
                             tracing::warn!("thumbnail written but not recorded: {e}");
+                            continue;
+                        }
+                    }
+                    let app = inner.app_handle.lock().clone();
+                    if let Some(app) = app {
+                        let _ = app.emit(crate::model::events::ITEM_UPDATED, vec![task.item_id]);
+                    }
+                }
+            })
+            .map_err(|e| AppError::Other(e.to_string()))?;
+
+        // Link previews. Its own thread rather than a second kind of message
+        // on the thumbnailer's channel: this one waits on a third party over
+        // the network, and a slow lookup must never hold up the thumbnail of
+        // the screenshot you just took.
+        let weak_inner = Arc::downgrade(&store.inner);
+        thread::Builder::new()
+            .name("store-link-preview".into())
+            .spawn(move || {
+                use tauri::Emitter;
+                while let Ok(task) = link_rx.recv() {
+                    let found = match preview::fetch(&task.url) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            // Offline, blocked, deleted video, changed API:
+                            // all of them leave the card exactly as it was.
+                            tracing::debug!("link preview for {} failed: {e}", task.url);
+                            continue;
+                        }
+                    };
+                    // The picture is written before the row points at it, for
+                    // the same reason capture thumbnails are.
+                    let thumb = found
+                        .thumbnail
+                        .as_deref()
+                        .and_then(|b| write_thumbnail(&task.root, &task.hash, b).ok().flatten());
+
+                    let Some(inner) = weak_inner.upgrade() else {
+                        return;
+                    };
+                    {
+                        let conn = inner.conn.lock();
+                        // COALESCE, so a title the user typed themselves and a
+                        // thumbnail that is already there both win. The lookup
+                        // fills a gap; it does not overwrite an answer.
+                        if let Err(e) = conn.execute(
+                            "UPDATE items
+                             SET title = COALESCE(title, ?1),
+                                 thumb_path = COALESCE(thumb_path, ?2)
+                             WHERE id = ?3",
+                            rusqlite::params![found.title, thumb, task.item_id],
+                        ) {
+                            tracing::warn!("link preview fetched but not recorded: {e}");
                             continue;
                         }
                     }
@@ -191,6 +265,13 @@ impl Store {
     /// Returns a copy of the current retention policy.
     pub fn retention_policy(&self) -> RetentionPolicy {
         *self.inner.retention_policy.read()
+    }
+
+    /// Turns link lookups on or off. Off is the default and stays the default
+    /// until settings say otherwise, so a store built before the setting is
+    /// pushed in cannot make a request.
+    pub fn set_link_previews(&self, enabled: bool) {
+        self.inner.link_previews.store(enabled, Ordering::SeqCst);
     }
 
     /// Attaches the Tauri AppHandle for event emission.
@@ -271,6 +352,18 @@ impl Store {
             None
         };
 
+        // 4b. A link worth looking up, if the user has asked for that. Decided
+        //     here so the URL is captured before `cap` is taken apart, and
+        //     queued after the insert for the same reason thumbnails are.
+        let pending_link: Option<String> = if cap.sub_kind == Some(SubKind::Link) {
+            cap.preview_text
+                .as_deref()
+                .filter(|u| preview::is_supported(u))
+                .map(str::to_string)
+        } else {
+            None
+        };
+
         // 5. Format blobs OUTSIDE the SQLite lock
         let mut format_entries = Vec::new();
         for fmt in cap.formats {
@@ -302,15 +395,15 @@ impl Store {
         let conn = self.conn();
 
         if !cap.is_reference {
-            let existing: Option<i64> = conn
+            let existing: Option<(i64, Option<String>)> = conn
                 .query_row(
-                    "SELECT id FROM items WHERE hash = ?1 AND is_reference = 0",
+                    "SELECT id, title FROM items WHERE hash = ?1 AND is_reference = 0",
                     [&hash],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .ok();
 
-            if let Some(id) = existing {
+            if let Some((id, title)) = existing {
                 conn.execute(
                     "UPDATE items SET created_at = ?1, copy_count = copy_count + 1 WHERE id = ?2",
                     rusqlite::params![now, id],
@@ -318,6 +411,14 @@ impl Store {
                 // A re-copy of an image whose thumbnail file went missing gets
                 // it back, rather than showing the placeholder forever.
                 self.queue_thumbnail(id, &hash, pending_thumb, &root);
+                // Likewise a link copied again after previews were switched on:
+                // re-copying it is the obvious way to ask for one, and it is
+                // the only way an old row ever gets looked up. A row that
+                // already has a title is left alone, so this cannot become a
+                // request per copy.
+                if title.is_none() {
+                    self.queue_link_preview(id, &hash, pending_link.as_deref(), &root);
+                }
                 return queries::get_item(&conn, &root, id);
             }
         }
@@ -375,6 +476,7 @@ impl Store {
         }
 
         self.queue_thumbnail(item_id, &hash, pending_thumb, &root);
+        self.queue_link_preview(item_id, &hash, pending_link.as_deref(), &root);
 
         queries::get_item(&conn, &root, item_id)
     }
@@ -388,6 +490,23 @@ impl Store {
             item_id,
             hash: hash.to_string(),
             bytes,
+            root: root.to_path_buf(),
+        });
+    }
+
+    /// Hands a link to the preview thread. A no-op unless the user has turned
+    /// previews on and the host is one `preview` is willing to contact — both
+    /// checks live here, before anything is queued, so a disabled setting
+    /// cannot leave a request sitting in a channel waiting to be sent.
+    fn queue_link_preview(&self, item_id: i64, hash: &str, url: Option<&str>, root: &Path) {
+        let Some(url) = url else { return };
+        if !self.inner.link_previews.load(Ordering::SeqCst) {
+            return;
+        }
+        let _ = self.inner.link_tx.send(LinkTask {
+            item_id,
+            hash: hash.to_string(),
+            url: url.to_string(),
             root: root.to_path_buf(),
         });
     }
@@ -481,6 +600,42 @@ impl Store {
         let root = self.root();
         let conn = self.conn();
         queries::clear_history(&conn, &root, include_pinned)
+    }
+
+    /// Looks up the links already in history that never got a preview, and
+    /// returns how many were queued. Called when the setting is switched on,
+    /// because that is the one moment the user has said yes to it: doing this
+    /// at every startup would re-ask YouTube about the same dead videos
+    /// forever, and doing it never would leave a history full of bare
+    /// hostnames that no amount of waiting fixes.
+    ///
+    /// Bounded: a very long history is not worth a thousand requests in one
+    /// burst, and anything past the cap is picked up by copying the link again.
+    pub fn backfill_link_previews(&self) -> AppResult<usize> {
+        const CAP: usize = 500;
+        if !self.inner.link_previews.load(Ordering::SeqCst) {
+            return Ok(0);
+        }
+
+        let root = self.root();
+        let pending: Vec<(i64, String, String)> = {
+            let conn = self.conn();
+            let mut stmt = conn.prepare(
+                "SELECT id, hash, preview_text FROM items
+                 WHERE sub_kind = 'link' AND title IS NULL AND preview_text IS NOT NULL
+                 ORDER BY created_at DESC",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.filter_map(|r| r.ok())
+                .filter(|(_, _, url): &(i64, String, String)| preview::is_supported(url))
+                .take(CAP)
+                .collect()
+        };
+
+        for (id, hash, url) in &pending {
+            self.queue_link_preview(*id, hash, Some(url), &root);
+        }
+        Ok(pending.len())
     }
 
     /// Age sweep plus, if configured, the size cap. Safe to call repeatedly.

@@ -194,6 +194,9 @@ export interface Settings {
   privacy: {
     respectClipboardFlags: boolean
     blockedProcesses: string[]
+    /// Whether a copied link may be looked up at the site that owns it. The
+    /// only setting in the app that lets it talk to anyone; on by default.
+    linkPreviews: boolean
   }
 }
 

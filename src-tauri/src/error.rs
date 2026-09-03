@@ -28,6 +28,9 @@ pub enum AppError {
     #[error("windows api: {0}")]
     Win(String),
 
+    #[error("network: {0}")]
+    Net(String),
+
     #[error("{0}")]
     Other(String),
 }
