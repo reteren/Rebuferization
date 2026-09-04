@@ -8,3 +8,10 @@ vite.config.ts.timestamp-*
 
 # Verification scratch scripts are worth keeping; their build output is not.
 scripts/**/target/
+
+# Local agent/editor state. Never belongs in the published history.
+.claude/
+CLAUDE.md
+
+# Windows shell folder-view state.
+desktop.ini
