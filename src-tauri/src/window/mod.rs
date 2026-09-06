@@ -130,12 +130,15 @@ unsafe extern "system" fn popup_subclass_proc(
         }
         WM_ENTERSIZEMOVE => {
             IN_MOVE_OR_RESIZE.store(true, Ordering::SeqCst);
-            *SIZE_AT_MOVE_START.lock().unwrap() = client_size(hwnd);
+            *SIZE_AT_MOVE_START.lock().unwrap_or_else(|e| e.into_inner()) = client_size(hwnd);
         }
         WM_EXITSIZEMOVE => {
             IN_MOVE_OR_RESIZE.store(false, Ordering::SeqCst);
             NC_BUTTON_DOWN.store(false, Ordering::SeqCst);
-            let before = SIZE_AT_MOVE_START.lock().unwrap().take();
+            let before = SIZE_AT_MOVE_START
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
             let resized = before.is_none() || before != client_size(hwnd);
             if resized {
                 if let Some(app) = POPUP_APP.get() {
@@ -224,16 +227,43 @@ fn persist_resized_size(app: AppHandle) {
 /// The outside-click dismissal handler is registered once at startup.
 static DISMISS_WIRED: AtomicBool = AtomicBool::new(false);
 
-/// Serializes show decisions. `show_popup` runs on both the hotkey thread and
-/// the main thread (tray, second instance); without a lock two concurrent
-/// calls both read `is_visible` before either shows, and the second can hide
-/// what the first just showed. Only `show_popup` ever holds it for real:
-/// blocking callers must not acquire it, because the hotkey thread holds it
-/// across `win.show()`/`set_focus()` and would deadlock against a main thread
-/// that blocks on the lock instead of servicing the window messages. The
-/// dismissal path therefore uses `try_lock` and gives up when a show is in
-/// flight (the show reasserts focus anyway).
-static SHOW_LOCK: Mutex<()> = Mutex::new(());
+/// Claimed for the length of a show, so that two concurrent ones cannot both
+/// read `is_visible` before either acts and have the second hide what the
+/// first just put on screen.
+///
+/// Deliberately an atomic claim and not a mutex, for the same reason
+/// `get_or_build` is not one. `show_popup` runs on the hotkey thread and on
+/// the main thread alike: the tray click handler and the single-instance
+/// callback both land on the event loop. It holds the claim across
+/// `place_popup`, `show` and `set_focus`, and every one of those has to be
+/// carried out by the event loop, blocking the caller until the main thread
+/// gets to it. With a mutex, a main thread that blocked on a lock held by the
+/// hotkey thread would never service those calls, and neither side could ever
+/// finish: the tray menu stops opening, settings stop opening, and the popup
+/// can no longer be dismissed, with the process sitting at zero CPU. That was
+/// not hypothetical — it reproduced in a soak test of Alt+V against repeated
+/// second launches, and it stayed hung permanently.
+///
+/// An atomic claim never makes one thread wait for another. The loser gives up
+/// instead, which loses nothing: the show already in flight ends in
+/// `set_focus`, which is exactly what the dropped call was asking for.
+static SHOWING: AtomicBool = AtomicBool::new(false);
+
+/// Holds the show claim and releases it on every path out of `show_popup`,
+/// including the `?` returns.
+struct ShowClaim;
+
+impl ShowClaim {
+    fn try_claim() -> Option<Self> {
+        (!SHOWING.swap(true, Ordering::SeqCst)).then_some(ShowClaim)
+    }
+}
+
+impl Drop for ShowClaim {
+    fn drop(&mut self) {
+        SHOWING.store(false, Ordering::SeqCst);
+    }
+}
 
 /// Caches the foreground `HWND`, positions the popup at the cursor clamped to
 /// the work area, applies the backdrop, and shows it.
@@ -242,7 +272,11 @@ pub fn show_popup(app: &AppHandle) -> AppResult<()> {
         .get_webview_window(POPUP_LABEL)
         .ok_or_else(|| AppError::Other("popup window not found".into()))?;
 
-    let _guard = SHOW_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(_claim) = ShowClaim::try_claim() else {
+        // A show is already in flight. It finishes by focusing the popup,
+        // which is what this call wanted, so there is nothing left to do.
+        return Ok(());
+    };
     // A drag or border press can never be in flight across a show; clear any
     // stale markers so a later genuine focus loss is always treated as a
     // dismissal.
@@ -288,15 +322,13 @@ pub fn hide_popup(app: &AppHandle) -> AppResult<()> {
 /// Dismissal path for when the user has already given focus to another
 /// window (outside click): that window keeps focus, so nothing is restored.
 pub fn hide_popup_dismissed(app: &AppHandle) -> AppResult<()> {
-    // Never block on the lock: see the SHOW_LOCK comment — a blocking
-    // acquisition here can deadlock against a show in flight from the hotkey
-    // thread. When a show holds the lock, the popup is being (re)shown and
-    // will reassert focus itself.
-    if let Ok(_guard) = SHOW_LOCK.try_lock() {
-        hide_popup_impl(app, false)
-    } else {
-        Ok(())
+    // A show in flight is about to assert focus itself, and the deactivation
+    // that brought us here is part of that handover rather than the user
+    // clicking away.
+    if SHOWING.load(Ordering::SeqCst) {
+        return Ok(());
     }
+    hide_popup_impl(app, false)
 }
 
 fn hide_popup_impl(app: &AppHandle, restore: bool) -> AppResult<()> {
@@ -422,7 +454,7 @@ static TRAY_MENU: Lazy = Lazy {
 /// thread, so `build` called from a command thread blocks until the main
 /// thread services it. A main thread that meanwhile blocked on a mutex held by
 /// that command thread would never service anything, and the app would hang —
-/// the same trap the `SHOW_LOCK` comment describes. An atomic claim never
+/// the same trap the `SHOWING` comment describes. An atomic claim never
 /// makes a thread wait for another, so there is nothing to deadlock on: the
 /// loser simply returns and lets the winner finish.
 fn get_or_build(
@@ -651,7 +683,15 @@ pub fn show_tray_menu(app: &AppHandle) -> AppResult<()> {
 
 fn reveal_tray_menu(win: &WebviewWindow) -> AppResult<()> {
     TRAY_MENU.shown();
-    match *TRAYMENU_ORIGIN.lock().unwrap_or_else(|e| e.into_inner()) {
+    // Read the origin out and drop the guard before placing the window. Held
+    // across the `match`, as a lock in the scrutinee position is, it would
+    // still be held during `place_at` — which moves a window and therefore
+    // blocks until the event loop runs it. This function also runs on the
+    // reveal-fallback thread, so that would let the main thread deadlock on
+    // this mutex inside `show_tray_menu`, and the menu would stop opening for
+    // the rest of the session.
+    let origin = *TRAYMENU_ORIGIN.lock().unwrap_or_else(|e| e.into_inner());
+    match origin {
         Some((x, y)) => position::place_at(win, POINT { x, y })?,
         None => position::place_at_cursor(win)?,
     }
@@ -695,7 +735,7 @@ fn reveal_settings(win: &WebviewWindow) -> AppResult<()> {
     // the dismissal below as the user clicking away — the settings window shut
     // itself the moment it opened.
     keep_out_of_taskbar(win);
-    *SETTINGS_SHOWN_AT.lock().unwrap() = Some(Instant::now());
+    *SETTINGS_SHOWN_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     win.set_focus().map_err(tauri_err)?;
     Ok(())
 }
@@ -724,7 +764,10 @@ static SETTINGS_SHOWN_AT: Mutex<Option<Instant>> = Mutex::new(None);
 const SETTINGS_FOCUS_GRACE: Duration = Duration::from_millis(600);
 
 fn settling_after_show() -> bool {
-    matches!(*SETTINGS_SHOWN_AT.lock().unwrap(), Some(t) if t.elapsed() < SETTINGS_FOCUS_GRACE)
+    matches!(
+        *SETTINGS_SHOWN_AT.lock().unwrap_or_else(|e| e.into_inner()),
+        Some(t) if t.elapsed() < SETTINGS_FOCUS_GRACE
+    )
 }
 
 /// Keeps the settings window out of the taskbar.
