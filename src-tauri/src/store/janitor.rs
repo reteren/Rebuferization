@@ -304,8 +304,16 @@ pub fn run_cleanup_with_app(
     older_than_days: Option<u32>,
     max_store_bytes: Option<i64>,
 ) -> AppResult<CleanupResult> {
-    let mut conn = store.conn();
+    // Root first, connection second. `switch_root` takes the root write lock
+    // and then the connection lock, so acquiring them the other way round here
+    // is a lock-order inversion: a relocation running on the event-loop thread
+    // (the `relocate_store` command) would hold `root` and wait for `conn`
+    // while this cleanup holds `conn` and waits for `root`, and neither ever
+    // finishes. The event loop dies with it, which is what makes the tray menu
+    // and the settings window stop opening at zero CPU. Every other pairing in
+    // this file already reads the root before taking the connection.
     let root = store.root().to_path_buf();
+    let mut conn = store.conn();
     let mut removed_items = 0i64;
     let mut freed_bytes = 0i64;
 

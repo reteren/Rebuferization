@@ -497,6 +497,14 @@ struct State {
 pub struct SettingsStore {
     path: PathBuf,
     state: Arc<Mutex<State>>,
+    /// Serializes writers so that two concurrent patches cannot interleave a
+    /// merge with a write. It exists so `state` never has to be held across
+    /// the write itself: `get` is called from the event-loop thread on every
+    /// popup show, and a settings write does `create` + `write_all` +
+    /// `sync_all` + `rename` and can touch the registry afterwards. Held
+    /// across all of that, `state` would stall the whole UI on a slow disk.
+    /// No reader ever takes this lock.
+    writing: Mutex<()>,
 }
 
 fn file_mtime(path: &Path) -> Option<SystemTime> {
@@ -562,6 +570,7 @@ impl SettingsStore {
         let store = SettingsStore {
             path: path.to_path_buf(),
             state: state.clone(),
+            writing: Mutex::new(()),
         };
 
         // Hot reload: a plain mtime poll, deliberately not a filesystem-watcher
@@ -572,18 +581,33 @@ impl SettingsStore {
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_secs(2));
             let current = file_mtime(&watch_path);
-            let mut st = state.lock();
-            if current == st.file_mtime {
+            let known = state.lock().file_mtime;
+            if current == known {
                 continue;
             }
-            if let Ok(bytes) = fs::read(&watch_path) {
-                if let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) {
+            // Read and parse with the lock released. Held across the read, a
+            // settings file on a busy disk would stall every `get`, and `get`
+            // runs on the event-loop thread on each popup show.
+            let reloaded = fs::read(&watch_path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .and_then(|mut value| {
                     sanitize_json(&mut value);
-                    if let Ok(mut s) = serde_json::from_value::<Settings>(value) {
-                        validate(&mut s);
-                        st.settings = s;
-                    }
-                }
+                    serde_json::from_value::<Settings>(value).ok()
+                })
+                .map(|mut s| {
+                    validate(&mut s);
+                    s
+                });
+            let mut st = state.lock();
+            // A `patch` may have landed while we were reading; it wrote the
+            // newer state and the newer mtime, and this reload would put the
+            // older file contents back over it.
+            if st.file_mtime != known {
+                continue;
+            }
+            if let Some(s) = reloaded {
+                st.settings = s;
             }
             st.file_mtime = current;
         });
@@ -603,21 +627,29 @@ impl SettingsStore {
                 "settings patch must be a JSON object".into(),
             ));
         }
-        let mut st = self.state.lock();
+        // Writers are serialized by their own lock so that the state lock is
+        // only ever held for a copy; see the `writing` field.
+        let _writing = self.writing.lock();
+        let current = self.state.lock().settings.clone();
 
-        let mut merged = serde_json::to_value(&st.settings)?;
+        let mut merged = serde_json::to_value(&current)?;
         merge_into(&mut merged, patch);
         sanitize_json(&mut merged);
         let mut next: Settings = serde_json::from_value(merged)?;
         validate(&mut next);
 
-        let behavior_changed = st.settings.behavior.launch_on_startup
+        let behavior_changed = current.behavior.launch_on_startup
             != next.behavior.launch_on_startup
-            || st.settings.behavior.silent_start != next.behavior.silent_start;
+            || current.behavior.silent_start != next.behavior.silent_start;
 
+        // The file first, still with no lock held: a write that fails must
+        // leave the in-memory settings exactly as they were.
         write_atomic(&self.path, &next)?;
-        st.settings = next.clone();
-        st.file_mtime = file_mtime(&self.path);
+        {
+            let mut st = self.state.lock();
+            st.settings = next.clone();
+            st.file_mtime = file_mtime(&self.path);
+        }
 
         if behavior_changed {
             apply_autostart(&next.behavior);

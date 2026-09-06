@@ -62,6 +62,25 @@ static MANAGER: OnceLock<Arc<Shared>> = OnceLock::new();
 /// so it never blocks on a lock held by another thread.
 pub(crate) struct Shared {
     on_trigger: Box<dyn Fn() + Send + Sync + 'static>,
+    /// Hands a fired chord to the dispatch thread instead of running the
+    /// callback inside the window procedure.
+    ///
+    /// The callback shows the popup, and showing a window reads it first —
+    /// `is_visible`, the monitor, the size — which `tauri-runtime-wry` answers
+    /// by posting to the event loop and blocking on a reply channel with no
+    /// timeout. Running that on this thread means the hotkey window stops
+    /// pumping messages until the main thread gets round to it. `rebind` sends
+    /// `WM_APP_REBIND` to this same window with `SendMessageW` from the main
+    /// thread and waits for the answer, so the two can meet head on: the main
+    /// thread waits for the hotkey window, the hotkey window waits for the
+    /// main thread, and neither ever moves again. The event loop is gone at
+    /// that point — the tray menu stops opening, settings stop opening, and an
+    /// open popup can no longer be dismissed, at zero CPU.
+    ///
+    /// Bounded at one so a burst cannot pile up: a second chord that arrives
+    /// while one is still queued is dropped, which is what the show path would
+    /// have done with it anyway.
+    trigger: mpsc::SyncSender<()>,
     ctrl: AtomicBool,
     alt: AtomicBool,
     shift: AtomicBool,
@@ -370,8 +389,10 @@ impl HotkeyManager {
     /// Starts the hidden-window message loop. No chord is bound until
     /// [`Self::rebind`] is called with the settings chord.
     pub fn new(on_trigger: Box<dyn Fn() + Send + Sync + 'static>) -> AppResult<HotkeyManager> {
+        let (trigger, fired) = mpsc::sync_channel::<()>(1);
         let shared = Arc::new(Shared {
             on_trigger,
+            trigger,
             ctrl: AtomicBool::new(false),
             alt: AtomicBool::new(false),
             shift: AtomicBool::new(false),
@@ -388,6 +409,22 @@ impl HotkeyManager {
         MANAGER
             .set(shared.clone())
             .map_err(|_| AppError::Other("hotkey manager already created".into()))?;
+
+        // Runs the trigger callback off the window thread; see `Shared::trigger`.
+        // It holds a weak reference so that dropping the manager closes the
+        // channel and ends the loop instead of keeping `Shared` alive.
+        let weak = Arc::downgrade(&shared);
+        std::thread::Builder::new()
+            .name("rebuffer-hotkey-dispatch".into())
+            .spawn(move || {
+                while fired.recv().is_ok() {
+                    let Some(shared) = weak.upgrade() else {
+                        return;
+                    };
+                    (shared.on_trigger)();
+                }
+            })
+            .map_err(|e| AppError::Other(format!("cannot spawn hotkey dispatch thread: {e}")))?;
 
         let (tx, rx) = mpsc::channel();
         let window_thread = spawn_window_thread(shared.clone(), tx)
@@ -632,7 +669,11 @@ unsafe extern "system" fn hotkey_wnd_proc(
     match msg {
         WM_HOTKEY | WM_APP_TRIGGER => {
             if let Some(shared) = MANAGER.get() {
-                (shared.on_trigger)();
+                // Never call the trigger from here: this thread has to stay
+                // free to answer `rebind`'s `SendMessageW`. See `Shared::trigger`.
+                if shared.trigger.try_send(()).is_err() {
+                    tracing::debug!("hotkey ignored: a show is already queued");
+                }
             }
             LRESULT(0)
         }
