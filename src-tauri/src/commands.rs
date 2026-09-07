@@ -174,7 +174,7 @@ pub fn open_item_with(state: State<'_, AppState>, id: i64) -> AppResult<()> {
 
 #[tauri::command]
 pub fn show_in_folder(state: State<'_, AppState>, id: i64) -> AppResult<()> {
-    crate::shell::reveal(&state.store.blob_path(id)?)
+    crate::shell::show_item_in_folder(&state.store, id)
 }
 
 /// Starts an OLE drag carrying `CF_HDROP`. Non-file items are materialized to

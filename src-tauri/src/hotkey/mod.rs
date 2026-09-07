@@ -77,10 +77,20 @@ pub(crate) struct Shared {
     /// that point — the tray menu stops opening, settings stop opening, and an
     /// open popup can no longer be dismissed, at zero CPU.
     ///
-    /// Bounded at one so a burst cannot pile up: a second chord that arrives
-    /// while one is still queued is dropped, which is what the show path would
-    /// have done with it anyway.
-    trigger: mpsc::SyncSender<()>,
+    /// Unbounded, and behind a mutex only because `Sender` is not `Sync`. The
+    /// lock is held for one non-blocking send and nothing else, so the window
+    /// procedure still never waits on another thread. A bounded channel was
+    /// tried and rejected: dropping a press that did not fit would lose a
+    /// deliberate second tap, which `WM_HOTKEY` never did — those queue in the
+    /// message queue and all get delivered. `MOD_NOREPEAT` already keeps a held
+    /// key from producing a stream, so the only thing that reaches this channel
+    /// is a person pressing a chord.
+    trigger: Mutex<mpsc::Sender<()>>,
+    /// Set by `Drop` to end the dispatch thread. The channel alone cannot do
+    /// it: `MANAGER` is a static that owns an `Arc<Shared>` for the life of the
+    /// process, so the sender inside `Shared` is never dropped and the receiver
+    /// never sees a disconnect.
+    quit_dispatch: AtomicBool,
     ctrl: AtomicBool,
     alt: AtomicBool,
     shift: AtomicBool,
@@ -365,6 +375,7 @@ pub fn active_chord() -> Chord {
 pub struct HotkeyManager {
     shared: Arc<Shared>,
     window_thread: Option<JoinHandle<()>>,
+    dispatch_thread: Option<JoinHandle<()>>,
     hook_thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -389,10 +400,11 @@ impl HotkeyManager {
     /// Starts the hidden-window message loop. No chord is bound until
     /// [`Self::rebind`] is called with the settings chord.
     pub fn new(on_trigger: Box<dyn Fn() + Send + Sync + 'static>) -> AppResult<HotkeyManager> {
-        let (trigger, fired) = mpsc::sync_channel::<()>(1);
+        let (trigger, fired) = mpsc::channel::<()>();
         let shared = Arc::new(Shared {
             on_trigger,
-            trigger,
+            trigger: Mutex::new(trigger),
+            quit_dispatch: AtomicBool::new(false),
             ctrl: AtomicBool::new(false),
             alt: AtomicBool::new(false),
             shift: AtomicBool::new(false),
@@ -411,16 +423,23 @@ impl HotkeyManager {
             .map_err(|_| AppError::Other("hotkey manager already created".into()))?;
 
         // Runs the trigger callback off the window thread; see `Shared::trigger`.
-        // It holds a weak reference so that dropping the manager closes the
-        // channel and ends the loop instead of keeping `Shared` alive.
+        // A weak reference, so that a callback still queued at shutdown cannot
+        // keep `Shared` — and through it the `AppHandle` the callback captured —
+        // alive past the manager.
         let weak = Arc::downgrade(&shared);
-        std::thread::Builder::new()
+        let dispatch_thread = std::thread::Builder::new()
             .name("rebuffer-hotkey-dispatch".into())
             .spawn(move || {
                 while fired.recv().is_ok() {
                     let Some(shared) = weak.upgrade() else {
                         return;
                     };
+                    // Checked after the wake-up, not before: `Drop` sets it and
+                    // then sends, so this is the only ordering that ends the
+                    // loop without running a callback into a torn-down app.
+                    if shared.quit_dispatch.load(Ordering::SeqCst) {
+                        return;
+                    }
                     (shared.on_trigger)();
                 }
             })
@@ -437,6 +456,7 @@ impl HotkeyManager {
         Ok(HotkeyManager {
             shared,
             window_thread: Some(window_thread),
+            dispatch_thread: Some(dispatch_thread),
             hook_thread: Mutex::new(None),
         })
     }
@@ -550,6 +570,15 @@ fn apply_new(
 impl Drop for HotkeyManager {
     fn drop(&mut self) {
         let shared = &self.shared;
+        // The dispatch thread first: it is the one that can still call into
+        // Tauri, and it must not run a callback against a half-torn-down app.
+        // The flag is set before the wake-up, which is the order the loop
+        // reads them in.
+        shared.quit_dispatch.store(true, Ordering::SeqCst);
+        let _ = shared.trigger.lock().send(());
+        if let Some(thread) = self.dispatch_thread.take() {
+            let _ = thread.join();
+        }
         if let Some(thread) = self.hook_thread.lock().take() {
             llhook::request_stop(shared);
             let _ = thread.join();
@@ -671,8 +700,8 @@ unsafe extern "system" fn hotkey_wnd_proc(
             if let Some(shared) = MANAGER.get() {
                 // Never call the trigger from here: this thread has to stay
                 // free to answer `rebind`'s `SendMessageW`. See `Shared::trigger`.
-                if shared.trigger.try_send(()).is_err() {
-                    tracing::debug!("hotkey ignored: a show is already queued");
+                if shared.trigger.lock().send(()).is_err() {
+                    tracing::debug!("hotkey ignored: the dispatch thread is gone");
                 }
             }
             LRESULT(0)

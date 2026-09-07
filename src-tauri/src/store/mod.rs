@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use parking_lot::{Mutex, MutexGuard, RwLock};
+use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use rusqlite::Connection;
 
 use tauri::AppHandle;
@@ -255,6 +255,22 @@ impl Store {
     /// Returns a lock guard to the SQLite connection.
     pub fn conn(&self) -> MutexGuard<'_, Connection> {
         self.inner.conn.lock()
+    }
+
+    /// The root and the connection taken together, in the order `switch_root`
+    /// takes them.
+    ///
+    /// `root()` hands back a clone and lets the read lock go, so a caller that
+    /// then takes `conn()` separately leaves a gap a relocation can slip
+    /// through: it would go on deleting blob files under the root it copied
+    /// while writing to the database it has just been handed, which is a
+    /// different store. Holding the read guard for as long as the connection
+    /// closes that gap, and taking them in this order — root, then connection —
+    /// is what keeps it from being the deadlock the reverse pairing used to be.
+    pub fn root_and_conn(&self) -> (RwLockReadGuard<'_, PathBuf>, MutexGuard<'_, Connection>) {
+        let root = self.inner.root.read();
+        let conn = self.inner.conn.lock();
+        (root, conn)
     }
 
     /// Updates the retention policy for automatic and manual cleanups.

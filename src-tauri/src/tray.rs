@@ -63,9 +63,13 @@ pub fn install(app: &AppHandle) -> AppResult<()> {
                 let app = tray.app_handle();
                 match button {
                     tauri::tray::MouseButton::Left => {
-                        let _ = crate::window::show_popup(app);
+                        tracing::info!("tray icon: left click");
+                        if let Err(e) = crate::window::show_popup(app) {
+                            tracing::error!("could not show the popup from the tray: {e}");
+                        }
                     }
                     tauri::tray::MouseButton::Right => {
+                        tracing::info!("tray icon: right click");
                         if let Err(e) = crate::window::show_tray_menu(app) {
                             tracing::error!("could not show the tray menu: {e}");
                         }

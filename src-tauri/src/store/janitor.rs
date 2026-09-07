@@ -304,16 +304,17 @@ pub fn run_cleanup_with_app(
     older_than_days: Option<u32>,
     max_store_bytes: Option<i64>,
 ) -> AppResult<CleanupResult> {
-    // Root first, connection second. `switch_root` takes the root write lock
-    // and then the connection lock, so acquiring them the other way round here
-    // is a lock-order inversion: a relocation running on the event-loop thread
-    // (the `relocate_store` command) would hold `root` and wait for `conn`
-    // while this cleanup holds `conn` and waits for `root`, and neither ever
-    // finishes. The event loop dies with it, which is what makes the tray menu
-    // and the settings window stop opening at zero CPU. Every other pairing in
-    // this file already reads the root before taking the connection.
-    let root = store.root().to_path_buf();
-    let mut conn = store.conn();
+    // Root and connection together, in that order. Taking them the other way
+    // round was a lock-order inversion against `switch_root`, which holds the
+    // root write lock and then waits for the connection: a relocation on the
+    // event-loop thread and this cleanup on the janitor thread would each hold
+    // what the other was waiting for, and the event loop would die with it —
+    // the tray menu and the settings window stop opening at zero CPU. Taking
+    // them as a pair also keeps a relocation from landing between the two and
+    // leaving this pass unlinking blobs under the old root while committing to
+    // the new database.
+    let (root_guard, mut conn) = store.root_and_conn();
+    let root = root_guard.to_path_buf();
     let mut removed_items = 0i64;
     let mut freed_bytes = 0i64;
 

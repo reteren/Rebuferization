@@ -513,7 +513,12 @@ fn file_mtime(path: &Path) -> Option<SystemTime> {
 
 /// Writes `settings.json` atomically: temp file in the same directory, fsync,
 /// then rename over the target (which replaces on Windows).
-fn write_atomic(path: &Path, settings: &Settings) -> AppResult<()> {
+///
+/// Returns the mtime of the file as it stood immediately after the rename.
+/// Reading it later, after the caller has taken a lock, would let an external
+/// edit land in between and be recorded as our own write — the watcher would
+/// then treat that edit as already seen and never load it.
+fn write_atomic(path: &Path, settings: &Settings) -> AppResult<Option<SystemTime>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -524,7 +529,7 @@ fn write_atomic(path: &Path, settings: &Settings) -> AppResult<()> {
     f.sync_all()?;
     drop(f);
     fs::rename(&tmp, path)?;
-    Ok(())
+    Ok(file_mtime(path))
 }
 
 impl SettingsStore {
@@ -557,8 +562,8 @@ impl SettingsStore {
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let s = Settings::default();
-                write_atomic(path, &s)?;
-                (s, file_mtime(path))
+                let mtime = write_atomic(path, &s)?;
+                (s, mtime)
             }
             Err(e) => return Err(e.into()),
         };
@@ -644,11 +649,11 @@ impl SettingsStore {
 
         // The file first, still with no lock held: a write that fails must
         // leave the in-memory settings exactly as they were.
-        write_atomic(&self.path, &next)?;
+        let written_mtime = write_atomic(&self.path, &next)?;
         {
             let mut st = self.state.lock();
             st.settings = next.clone();
-            st.file_mtime = file_mtime(&self.path);
+            st.file_mtime = written_mtime;
         }
 
         if behavior_changed {
@@ -668,7 +673,7 @@ impl SettingsStore {
 // autostart wiring
 // ---------------------------------------------------------------------------
 
-type AutostartHook = Box<dyn Fn(&BehaviorSettings) + Send + Sync>;
+type AutostartHook = Arc<dyn Fn(&BehaviorSettings) + Send + Sync>;
 
 /// Registered once at startup (by the tray installer, which holds the
 /// `AppHandle`); `patch` calls it when `launchOnStartup` or `silentStart`
@@ -680,12 +685,17 @@ pub fn set_autostart_hook<F>(hook: F)
 where
     F: Fn(&BehaviorSettings) + Send + Sync + 'static,
 {
-    *AUTOSTART_HOOK.lock() = Some(Box::new(hook));
+    *AUTOSTART_HOOK.lock() = Some(Arc::new(hook));
 }
 
 /// Applies the current startup behavior through the registered hook (if any).
 pub fn apply_autostart(behavior: &BehaviorSettings) {
-    if let Some(hook) = AUTOSTART_HOOK.lock().as_ref() {
+    // Clone the handle out and drop the lock before running it. The hook
+    // enables or disables autostart and rewrites an HKCU value, and holding a
+    // global lock across registry work is how a slow call turns into a stalled
+    // caller.
+    let hook = AUTOSTART_HOOK.lock().clone();
+    if let Some(hook) = hook {
         hook(behavior);
     }
 }

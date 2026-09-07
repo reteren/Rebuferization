@@ -145,6 +145,24 @@ pub fn open_item_with(store: &Store, id: i64) -> AppResult<()> {
     open_with(path)
 }
 
+/// Reveals one stored item in Explorer, with the file selected.
+///
+/// Through `resolve_paths` for the same reason `open_item` is. Revealing the
+/// raw blob drops the user into the store's `blobs/ab/cd/` tree, in front of a
+/// file called `216049aabd1791c4c6bd85326a34df2750c…` with no extension — the
+/// store's internal bookkeeping, which says nothing about what they clicked and
+/// cannot even be opened by double-clicking it. The resolver hands a reference
+/// its own path, so an added file is shown where it actually lives, and gives a
+/// captured item the materialized copy: named from its title, with the real
+/// extension, so what Explorer selects is a `.png` or a `.txt`.
+pub fn show_item_in_folder(store: &Store, id: i64) -> AppResult<()> {
+    let paths = resolve_paths(store, &[id])?;
+    let path = paths
+        .first()
+        .ok_or_else(|| AppError::Other(format!("item {id} resolved to no file")))?;
+    reveal(path)
+}
+
 /// Opens the shell's "Open with…" dialog for a file — the same picker Explorer
 /// shows, listing the apps that can handle this extension.
 ///
@@ -270,13 +288,14 @@ fn session_dir() -> AppResult<PathBuf> {
     Ok(dir)
 }
 
-/// Resolves every id to a path the drop target can read: a reference drags its
-/// original file, a captured item drags a materialized copy of its blob.
+/// Resolves every id to a real file on disk: a reference resolves to its own
+/// original file, a captured item to a materialized copy of its blob under a
+/// sensible name. Used by opening, revealing in Explorer and dragging alike.
 /// Missing blobs and gone reference files are errors the frontend can show,
 /// never panics.
 fn resolve_paths(store: &Store, ids: &[i64]) -> AppResult<Vec<PathBuf>> {
     if ids.is_empty() {
-        return Err(AppError::Other("nothing to drag".into()));
+        return Err(AppError::Other("no item to resolve".into()));
     }
     let mut paths = Vec::with_capacity(ids.len());
     for &id in ids {
@@ -296,13 +315,12 @@ fn resolve_paths(store: &Store, ids: &[i64]) -> AppResult<Vec<PathBuf>> {
         } else {
             // A captured item's blob is content-addressed (`blobs/ab/cd/<hash>`)
             // with a meaningless name, so it must be materialized under a
-            // sensible name before it can be handed to a drop target.
+            // sensible name before it can be handed to a drop target, opened,
+            // or shown to the user in Explorer.
             let blob = match store.blob_path(id) {
                 Ok(p) => p,
                 Err(AppError::NotFound(_)) => {
-                    return Err(AppError::Other(format!(
-                        "item {id} has no stored file to drag"
-                    )));
+                    return Err(AppError::Other(format!("item {id} has no stored file")));
                 }
                 Err(e) => return Err(e),
             };

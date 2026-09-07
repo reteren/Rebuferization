@@ -275,6 +275,7 @@ pub fn show_popup(app: &AppHandle) -> AppResult<()> {
     let Some(_claim) = ShowClaim::try_claim() else {
         // A show is already in flight. It finishes by focusing the popup,
         // which is what this call wanted, so there is nothing left to do.
+        tracing::debug!("show_popup: a show is already in flight, dropping this one");
         return Ok(());
     };
     // A drag or border press can never be in flight across a show; clear any
@@ -326,6 +327,7 @@ pub fn hide_popup_dismissed(app: &AppHandle) -> AppResult<()> {
     // that brought us here is part of that handover rather than the user
     // clicking away.
     if SHOWING.load(Ordering::SeqCst) {
+        tracing::debug!("popup dismissal ignored: a show is in flight");
         return Ok(());
     }
     hide_popup_impl(app, false)
@@ -467,6 +469,7 @@ fn get_or_build(
     }
     if lazy.building.swap(true, Ordering::SeqCst) {
         // Someone else is building it right now and owes the reveal.
+        tracing::info!("{}: a build is already in flight", lazy.label);
         return Ok(None);
     }
     // Re-check now that the build slot is ours: the window may have been
@@ -476,20 +479,43 @@ fn get_or_build(
         return Ok(Some(win));
     }
     lazy.pending_show.store(true, Ordering::SeqCst);
-    let built = build(app);
-    lazy.building.store(false, Ordering::SeqCst);
-    match built {
-        Ok(win) => {
-            arm_reveal_fallback(lazy, &win);
-            Ok(None)
+
+    // The build runs on a thread of its own, never on the caller's, because
+    // the caller is very often the event-loop thread: `show_tray_menu` runs
+    // inside the tray click handler and `show_settings` inside a synchronous
+    // Tauri command, and both of those are event-loop work. `tauri-runtime-wry`
+    // is explicit about this — `Context::create_window` and `create_webview`
+    // both carry the note "this must be called from a separate thread,
+    // otherwise the channel will introduce a deadlock", because creating the
+    // window has to be carried out by the event loop and the creation waits
+    // for it. Asking the event loop to do it from inside the event loop is the
+    // deadlock, and it is not theoretical: a right-click on the tray icon
+    // logged "tray icon: right click", entered here, and never came back —
+    // the process sat at `Responding=False` from that moment on, with the tray
+    // menu, the settings window and the popup dismissal all gone with it.
+    //
+    // Nothing is lost by not waiting. This function already returns `None` for
+    // "a build was started and the reveal is owed", and the reveal is done by
+    // the page-load hook, or by `arm_reveal_fallback` if that never arrives.
+    let app = app.clone();
+    std::thread::spawn(move || {
+        tracing::info!("{}: building off the event loop", lazy.label);
+        let built = build(&app);
+        lazy.building.store(false, Ordering::SeqCst);
+        match built {
+            Ok(win) => {
+                tracing::info!("{}: built", lazy.label);
+                arm_reveal_fallback(lazy, &win);
+            }
+            Err(e) => {
+                // Nothing will ever reveal it now; drop the debt so a later
+                // show is not mistaken for one already owed.
+                lazy.pending_show.store(false, Ordering::SeqCst);
+                tracing::error!("{} could not be built: {e}", lazy.label);
+            }
         }
-        Err(e) => {
-            // Nothing will ever reveal it now; drop the debt so a later show
-            // is not mistaken for one already owed.
-            lazy.pending_show.store(false, Ordering::SeqCst);
-            Err(e)
-        }
-    }
+    });
+    Ok(None)
 }
 
 impl Lazy {
@@ -597,6 +623,7 @@ fn reveal_when_loaded(lazy: &'static Lazy, win: &WebviewWindow, event: PageLoadE
     if event != PageLoadEvent::Finished || !lazy.pending_show.swap(false, Ordering::SeqCst) {
         return;
     }
+    tracing::info!("{}: page loaded, revealing", lazy.label);
     if let Err(e) = (lazy.reveal)(win) {
         tracing::error!("{} could not be shown: {e}", lazy.label);
     }
@@ -669,15 +696,23 @@ static TRAYMENU_ORIGIN: Mutex<Option<(i32, i32)>> = Mutex::new(None);
 /// no amount of CSS reaches it. The cost is that dismissal, sizing and
 /// placement are ours to handle.
 pub fn show_tray_menu(app: &AppHandle) -> AppResult<()> {
+    tracing::debug!("show_tray_menu: reading the cursor");
     let at = position::cursor_pos()?;
     *TRAYMENU_ORIGIN.lock().unwrap_or_else(|e| e.into_inner()) = Some((at.x, at.y));
+    tracing::debug!("show_tray_menu: origin {},{} recorded", at.x, at.y);
 
     // A window that has to be built is left hidden and shown from its
     // page-load hook: an empty transparent window at the cursor would be a
     // hole in the screen until the menu painted itself.
     match get_or_build(&TRAY_MENU, app, ensure_tray_menu)? {
-        Some(win) => reveal_tray_menu(&win),
-        None => Ok(()),
+        Some(win) => {
+            tracing::info!("tray menu: revealing the existing window");
+            reveal_tray_menu(&win)
+        }
+        None => {
+            tracing::info!("tray menu: building; the reveal is owed to the page-load hook");
+            Ok(())
+        }
     }
 }
 
@@ -718,8 +753,14 @@ pub fn hide_tray_menu(app: &AppHandle) -> AppResult<()> {
 /// it first if it is not currently around.
 pub fn show_settings(app: &AppHandle) -> AppResult<()> {
     match get_or_build(&SETTINGS, app, ensure_settings)? {
-        Some(win) => reveal_settings(&win),
-        None => Ok(()),
+        Some(win) => {
+            tracing::info!("settings: revealing the existing window");
+            reveal_settings(&win)
+        }
+        None => {
+            tracing::info!("settings: building; the reveal is owed to the page-load hook");
+            Ok(())
+        }
     }
 }
 
