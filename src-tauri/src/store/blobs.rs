@@ -141,7 +141,58 @@ pub fn write_thumbnail(root: &Path, hash: &str, data: &[u8]) -> AppResult<Option
         img
     };
 
-    let rgba = thumb_img.to_rgba8();
+    write_thumbnail_image(root, hash, thumb_img.to_rgba8())
+}
+
+/// The same thumbnail, from pixels that are already decoded.
+///
+/// The Windows shell hands back a thumbnail as raw BGRA for the formats this
+/// application cannot decode itself — a video frame above all — and there is no
+/// encoded image to hand to `write_thumbnail`. Re-encoding those pixels to PNG
+/// only so that `write_thumbnail` could decode them again would be pure waste,
+/// so both entry points share the resize, encode and atomic write below.
+pub fn write_thumbnail_rgba(
+    root: &Path,
+    hash: &str,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> AppResult<Option<String>> {
+    let expected = (width as usize) * (height as usize) * 4;
+    if width == 0 || height == 0 || rgba.len() != expected {
+        tracing::warn!(
+            "thumbnail pixels do not match {width}x{height}: {} bytes, expected {expected}",
+            rgba.len()
+        );
+        return Ok(None);
+    }
+    let Some(buffer) = image::RgbaImage::from_raw(width, height, rgba.to_vec()) else {
+        return Ok(None);
+    };
+    let img = image::DynamicImage::ImageRgba8(buffer);
+    let img = if width > 512 || height > 512 {
+        img.resize(512, 512, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+    write_thumbnail_image(root, hash, img.to_rgba8())
+}
+
+/// Encodes to WebP and writes it atomically. The shared tail of both
+/// thumbnail entry points.
+fn write_thumbnail_image(
+    root: &Path,
+    hash: &str,
+    rgba: image::RgbaImage,
+) -> AppResult<Option<String>> {
+    let thumbs_dir = root.join("blobs").join("thumbs");
+    std::fs::create_dir_all(&thumbs_dir)?;
+    let thumb_filename = thumb_rel_path(hash);
+    let target_path = thumbs_dir.join(&thumb_filename);
+    if target_path.exists() {
+        return Ok(Some(thumb_filename));
+    }
+
     let encoder = webp::Encoder::from_rgba(&rgba, rgba.width(), rgba.height());
     let webp_mem = encoder.encode(80.0);
     let webp_bytes = &*webp_mem;

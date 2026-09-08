@@ -17,6 +17,7 @@ pub mod model;
 pub mod preview;
 pub mod settings;
 pub mod shell;
+pub mod shellthumb;
 pub mod store;
 pub mod tray;
 pub mod window;

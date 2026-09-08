@@ -150,8 +150,27 @@ fn decode_hdrop(max_bytes: u64) -> AppResult<Option<Capture>> {
             return Ok(None);
         }
 
-        let is_video = files.len() == 1 && classify::is_video_file(&files[0].path);
-        let kind = if is_video { Kind::Video } else { Kind::File };
+        // One file gets classified by what it is, so its card can show a
+        // picture; several files stay a generic file item, whose card is a
+        // stack of document glyphs and a count. A lone image that stayed
+        // `Kind::File` was the whole reason a `.gif` copied in Explorer showed
+        // nothing at all.
+        let single = if files.len() == 1 {
+            Some(files[0].path.as_str())
+        } else {
+            None
+        };
+        let kind = match single {
+            Some(p) if classify::is_video_file(p) => Kind::Video,
+            Some(p) if classify::is_image_file(p) => Kind::Image,
+            _ => Kind::File,
+        };
+        let sub_kind = match single {
+            Some(p) if kind == Kind::Image && classify::is_animated_image_file(p) => {
+                Some(SubKind::Animated)
+            }
+            _ => None,
+        };
 
         let preview_text = files
             .iter()
@@ -170,7 +189,7 @@ fn decode_hdrop(max_bytes: u64) -> AppResult<Option<Capture>> {
 
         Ok(Some(Capture {
             kind,
-            sub_kind: None,
+            sub_kind,
             primary: None,
             formats: Vec::new(),
             files,

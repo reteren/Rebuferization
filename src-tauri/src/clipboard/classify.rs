@@ -212,6 +212,43 @@ pub fn is_animated_image(bytes: &[u8]) -> bool {
     false
 }
 
+/// Checks if a file path has a still- or moving-image extension.
+///
+/// A file copied in Explorer arrives as a bare path, so the extension is the
+/// only thing there is to go on. It decides whether the card can show a
+/// picture at all: without it a copied `.gif` lands in the generic file kind,
+/// whose card is a document glyph and a file name and never renders a
+/// thumbnail.
+pub fn is_image_file(path: &str) -> bool {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff" | "avif"
+    )
+}
+
+/// Whether this file is an image format that can hold more than one frame.
+///
+/// Extension alone, deliberately. Reading the file to count frames would mean
+/// decoding it on the clipboard listener thread for every copy, and being
+/// wrong here is cheap in both directions: a still GIF simply animates
+/// nothing, and the card falls back to its static frame if the original will
+/// not load.
+pub fn is_animated_image_file(path: &str) -> bool {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    matches!(ext.as_str(), "gif" | "webp" | "avif" | "apng")
+}
+
 /// Checks if a file path has a video extension.
 pub fn is_video_file(path: &str) -> bool {
     let ext = Path::new(path)

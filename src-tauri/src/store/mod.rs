@@ -18,7 +18,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
 use rusqlite::Connection;
 
-use tauri::AppHandle;
+use std::collections::HashSet;
+
+use tauri::{AppHandle, Manager};
 
 use crate::capture::Capture;
 use crate::error::{AppError, AppResult};
@@ -47,8 +49,54 @@ fn current_time_ms() -> i64 {
 struct ThumbnailTask {
     pub item_id: i64,
     pub hash: String,
-    pub bytes: Vec<u8>,
+    pub source: ThumbSource,
     pub root: PathBuf,
+}
+
+/// Where a pending thumbnail's pixels come from.
+///
+/// A captured image already has its bytes in memory. A file copied in Explorer
+/// has nothing but a path, and for a video there is nothing this application
+/// can decode at all — so the worker reads the file itself, and falls back to
+/// the thumbnail Windows already has for it. Doing either on the capture path
+/// would mean reading megabytes on the clipboard listener thread.
+enum ThumbSource {
+    Bytes(Vec<u8>),
+    File(PathBuf),
+}
+
+/// The largest file this will read into memory to decode itself. Beyond it the
+/// shell's own thumbnail is used instead, which never loads the whole file.
+const MAX_DECODE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// A thumbnail for a file this application only knows by path.
+///
+/// Two sources, in order of fidelity. Decoding the file ourselves gives a
+/// picture of the real first frame at full quality, so that is tried first for
+/// anything the `image` crate handles. Everything else — a video above all, but
+/// also any image format not compiled in — falls back to the thumbnail Windows
+/// itself would show in Explorer, which is exactly the still frame the user
+/// expects to see on the card. A file with neither is left without a
+/// thumbnail rather than given a generic file-type icon blown up to card size.
+fn thumbnail_from_file(root: &Path, hash: &str, path: &Path) -> AppResult<Option<String>> {
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+    let decodable = size <= MAX_DECODE_BYTES
+        && crate::clipboard::classify::is_image_file(&path.to_string_lossy());
+    if decodable {
+        if let Ok(bytes) = std::fs::read(path) {
+            if let Ok(Some(rel)) = write_thumbnail(root, hash, &bytes) {
+                return Ok(Some(rel));
+            }
+        }
+    }
+    match crate::shellthumb::thumbnail_rgba(path, 512) {
+        Ok(Some((rgba, w, h))) => blobs::write_thumbnail_rgba(root, hash, &rgba, w, h),
+        Ok(None) => Ok(None),
+        Err(e) => {
+            tracing::debug!("no shell thumbnail for {}: {e}", path.display());
+            Ok(None)
+        }
+    }
 }
 
 /// One captured link waiting to be looked up. Same shape and same reasoning as
@@ -77,6 +125,8 @@ struct StoreInner {
     /// worker.
     link_previews: AtomicBool,
     stop_janitor: AtomicBool,
+    /// Files already allowed through the asset protocol; see `allow_asset`.
+    granted_assets: Mutex<HashSet<PathBuf>>,
 }
 
 /// The whole persistence layer. Cheap to clone (shares one pooled connection
@@ -109,6 +159,7 @@ impl Store {
             link_tx,
             link_previews: AtomicBool::new(false),
             stop_janitor: AtomicBool::new(false),
+            granted_assets: Mutex::new(HashSet::new()),
         });
 
         let store = Store { inner };
@@ -128,7 +179,13 @@ impl Store {
             .spawn(move || {
                 use tauri::Emitter;
                 while let Ok(task) = thumb_rx.recv() {
-                    let rel = match write_thumbnail(&task.root, &task.hash, &task.bytes) {
+                    let written = match &task.source {
+                        ThumbSource::Bytes(bytes) => write_thumbnail(&task.root, &task.hash, bytes),
+                        ThumbSource::File(path) => {
+                            thumbnail_from_file(&task.root, &task.hash, path)
+                        }
+                    };
+                    let rel = match written {
                         Ok(Some(rel)) => rel,
                         // Undecodable image, or the write failed: the row keeps
                         // its NULL thumb_path and the card keeps the
@@ -292,7 +349,63 @@ impl Store {
 
     /// Attaches the Tauri AppHandle for event emission.
     pub fn set_app_handle(&self, app: AppHandle) {
+        self.grant_animated_assets(&app);
         *self.inner.app_handle.lock() = Some(app);
+    }
+
+    /// Lets the WebView read the animated originals that live outside the
+    /// store.
+    ///
+    /// `assetProtocol.scope` in tauri.conf.json is `$APPDATA/Rebuffer/**`, and
+    /// deliberately so: the WebView has no business reading the disk at large.
+    /// But a GIF the user added from the shelf, or copied in Explorer, plays
+    /// from where it already lies rather than from a copy, so the card asks for
+    /// a path the scope does not cover and the animation silently never loads.
+    /// Each such file is allowed individually — not its folder, and nothing
+    /// else in it — and only for files the user themselves put into the
+    /// history.
+    fn grant_animated_assets(&self, app: &AppHandle) {
+        let paths: Vec<String> = {
+            let conn = self.inner.conn.lock();
+            let Ok(mut stmt) = conn.prepare(
+                "SELECT i.ref_path, f.path
+                   FROM items i
+                   LEFT JOIN item_files f ON f.item_id = i.id AND f.position = 0
+                  WHERE i.sub_kind = 'animated' AND i.blob_path IS NULL",
+            ) else {
+                return;
+            };
+            let rows = stmt.query_map([], |r| {
+                Ok(r.get::<_, Option<String>>(0)?
+                    .or(r.get::<_, Option<String>>(1)?))
+            });
+            match rows {
+                Ok(rows) => rows.filter_map(|r| r.ok().flatten()).collect(),
+                Err(_) => return,
+            }
+        };
+        for path in paths {
+            self.allow_asset(app, Path::new(&path));
+        }
+    }
+
+    /// Allows one file through the asset protocol, once. Repeating the call
+    /// would push the same glob onto the scope's pattern list again on every
+    /// capture, so the set is what keeps that list from growing for the life of
+    /// the process.
+    fn allow_asset(&self, app: &AppHandle, path: &Path) {
+        if !path.is_absolute() {
+            return;
+        }
+        {
+            let mut granted = self.inner.granted_assets.lock();
+            if !granted.insert(path.to_path_buf()) {
+                return;
+            }
+        }
+        if let Err(e) = app.asset_protocol_scope().allow_file(path) {
+            tracing::debug!("could not allow {}: {e}", path.display());
+        }
     }
 
     /// Updates the root directory and reopens the database connection (used during relocation).
@@ -339,6 +452,23 @@ impl Store {
             compute_hash(b"")
         };
 
+        // A GIF copied in Explorer animates from where it already lies rather
+        // than from a copy, so the WebView has to be allowed to read that one
+        // file; see `allow_asset`. Done here, before any of the database work,
+        // because a second copy of something already in the history returns
+        // from the duplicate branch below and would otherwise never reach it —
+        // which is exactly what left `asset protocol not configured to allow
+        // the path` in the log while the card sat on its static frame.
+        if cap.sub_kind == Some(SubKind::Animated) && cap.primary.is_none() {
+            let source = cap
+                .ref_path
+                .clone()
+                .or_else(|| cap.files.first().map(|f| f.path.clone()));
+            if let (Some(app), Some(source)) = (self.inner.app_handle.lock().clone(), source) {
+                self.allow_asset(&app, Path::new(&source));
+            }
+        }
+
         let root = self.root();
 
         // 3. Write primary blob to disk OUTSIDE the SQLite lock
@@ -354,14 +484,23 @@ impl Store {
         //    the worker can update and announce. The row is therefore correct
         //    at every instant: either it has a thumbnail whose file is there,
         //    or it has none.
-        let mut pending_thumb: Option<Vec<u8>> = None;
-        let thumb_path = if cap.kind == Kind::Image {
+        //    A capture that is a single file rather than bytes gets one too:
+        //    the path is all there is, and for a video the frame can only come
+        //    from the shell. Several files stay a generic file item, whose card
+        //    shows a document glyph and a count rather than any one picture.
+        let mut pending_thumb: Option<ThumbSource> = None;
+        let wants_thumb = cap.kind == Kind::Image || cap.kind == Kind::Video;
+        let thumb_path = if wants_thumb {
             let thumb_filename = format!("{}.webp", hash);
             let thumb_target = root.join("blobs").join("thumbs").join(&thumb_filename);
             if thumb_target.exists() {
                 Some(thumb_filename)
             } else {
-                pending_thumb = cap.primary.clone();
+                pending_thumb = match (&cap.primary, cap.files.as_slice()) {
+                    (Some(bytes), _) => Some(ThumbSource::Bytes(bytes.clone())),
+                    (None, [only]) => Some(ThumbSource::File(PathBuf::from(&only.path))),
+                    _ => None,
+                };
                 None
             }
         } else {
@@ -423,6 +562,32 @@ impl Store {
                 conn.execute(
                     "UPDATE items SET created_at = ?1, copy_count = copy_count + 1 WHERE id = ?2",
                     rusqlite::params![now, id],
+                )?;
+                // Bring the row up to what this capture knows about the same
+                // content. Copying something a second time used to touch only
+                // the date, so a row written by an older version kept whatever
+                // it was classified as then — a GIF copied in Explorer stayed a
+                // generic file item, with a card that shows a document glyph
+                // and can never show a picture, no matter how many times the
+                // user copied it again trying to make it work.
+                //
+                // `kind` is replaced outright because the same content always
+                // classifies the same way, so the newer answer is the better
+                // one. `sub_kind` and `thumb_path` are only filled in when they
+                // are missing: a thumbnail already recorded is already correct,
+                // and this must not undo one.
+                conn.execute(
+                    "UPDATE items
+                        SET kind = ?1,
+                            sub_kind = COALESCE(sub_kind, ?2),
+                            thumb_path = COALESCE(thumb_path, ?3)
+                      WHERE id = ?4",
+                    rusqlite::params![
+                        cap.kind.as_str(),
+                        cap.sub_kind.map(|s| s.as_str().to_string()),
+                        thumb_path,
+                        id
+                    ],
                 )?;
                 // A re-copy of an image whose thumbnail file went missing gets
                 // it back, rather than showing the placeholder forever.
@@ -500,12 +665,12 @@ impl Store {
     /// Hands an image to the thumbnailer thread. A no-op when there is nothing
     /// to generate — either the item is not an image, or its thumbnail file
     /// already exists and the row already points at it.
-    fn queue_thumbnail(&self, item_id: i64, hash: &str, bytes: Option<Vec<u8>>, root: &Path) {
-        let Some(bytes) = bytes else { return };
+    fn queue_thumbnail(&self, item_id: i64, hash: &str, source: Option<ThumbSource>, root: &Path) {
+        let Some(source) = source else { return };
         let _ = self.inner.thumb_tx.send(ThumbnailTask {
             item_id,
             hash: hash.to_string(),
-            bytes,
+            source,
             root: root.to_path_buf(),
         });
     }
@@ -583,8 +748,39 @@ impl Store {
 
     pub fn add_references(&self, paths: &[String]) -> AppResult<Vec<ItemDto>> {
         let root = self.root();
-        let conn = self.conn();
-        queries::add_references(&conn, &root, paths)
+        let items = {
+            let conn = self.conn();
+            queries::add_references(&conn, &root, paths)?
+        };
+        // A reference the query could not thumbnail itself — a video, or an
+        // image format the `image` crate does not carry — is handed to the same
+        // background worker a capture uses. It must not happen inline: this
+        // runs inside a synchronous Tauri command, which is event-loop work,
+        // and asking the shell for a video frame there would stall the UI.
+        let app = self.inner.app_handle.lock().clone();
+        for item in &items {
+            if item.sub_kind == Some(SubKind::Animated) {
+                if let (Some(app), Some(path)) = (app.as_ref(), item.ref_path.as_deref()) {
+                    self.allow_asset(app, Path::new(path));
+                }
+            }
+            if item.thumb_url.is_some() {
+                continue;
+            }
+            if !matches!(item.kind, Kind::Image | Kind::Video) {
+                continue;
+            }
+            let Some(path) = item.ref_path.as_deref() else {
+                continue;
+            };
+            self.queue_thumbnail(
+                item.id,
+                &compute_hash(path.as_bytes()),
+                Some(ThumbSource::File(PathBuf::from(path))),
+                &root,
+            );
+        }
+        Ok(items)
     }
 
     pub fn touch_used(&self, id: i64) -> AppResult<()> {

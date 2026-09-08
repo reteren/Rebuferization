@@ -88,17 +88,25 @@ pub fn map_rows_to_items(
         return Ok(Vec::new());
     }
 
+    // Animated rows are pulled in as well, not just file and reference rows: a
+    // GIF copied in Explorer is an image item whose only trace of the original
+    // is its `item_files` path, and that path is what the card has to animate.
     let file_ids: Vec<i64> = raw_rows
         .iter()
-        .filter(|r| r.kind_str == "file" || r.is_reference_int != 0)
+        .filter(|r| {
+            r.kind_str == "file"
+                || r.is_reference_int != 0
+                || r.sub_kind_str.as_deref() == Some("animated")
+        })
         .map(|r| r.id)
         .collect();
 
     let mut files_map: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut paths_map: HashMap<i64, Vec<String>> = HashMap::new();
     if !file_ids.is_empty() {
         let placeholders: Vec<String> = (1..=file_ids.len()).map(|i| format!("?{}", i)).collect();
         let sql = format!(
-            "SELECT item_id, file_name FROM item_files WHERE item_id IN ({}) ORDER BY item_id, position ASC",
+            "SELECT item_id, file_name, path FROM item_files WHERE item_id IN ({}) ORDER BY item_id, position ASC",
             placeholders.join(", ")
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -110,7 +118,9 @@ pub fn map_rows_to_items(
         while let Some(row) = rows.next()? {
             let item_id: i64 = row.get(0)?;
             let file_name: String = row.get(1)?;
+            let path: String = row.get(2)?;
             files_map.entry(item_id).or_default().push(file_name);
+            paths_map.entry(item_id).or_default().push(path);
         }
     }
 
@@ -122,12 +132,27 @@ pub fn map_rows_to_items(
             let kind = Kind::parse(&r.kind_str);
             let sub_kind = r.sub_kind_str.as_deref().and_then(SubKind::parse);
 
-            // An animated item also carries a URL to its ORIGINAL blob: the
+            // An animated item also carries a URL to its ORIGINAL: the
             // thumbnail is one frame re-encoded as static WebP, so rendering a
             // GIF from it can never move.
+            //
+            // The original is not always a blob. A GIF the user added from the
+            // shelf is a reference and has only `ref_path`; one copied in
+            // Explorer has neither a blob nor a reference, only its
+            // `item_files` path. Deriving this from the blob alone is why
+            // neither of those ever animated.
             let animated_url = if sub_kind == Some(SubKind::Animated) {
-                r._blob_path.as_ref().map(|b| {
-                    let abs = root.join("blobs").join(b);
+                let source = if let Some(blob) = r._blob_path.as_ref() {
+                    Some(root.join("blobs").join(blob))
+                } else if let Some(p) = r.ref_path.as_ref() {
+                    Some(PathBuf::from(p))
+                } else {
+                    paths_map
+                        .get(&r.id)
+                        .and_then(|paths| paths.first())
+                        .map(PathBuf::from)
+                };
+                source.map(|abs| {
                     format!(
                         "http://asset.localhost/{}",
                         urlencoding::encode(&abs.to_string_lossy())
@@ -582,6 +607,15 @@ pub fn add_references(conn: &Connection, root: &Path, paths: &[String]) -> AppRe
             _ => Kind::File,
         };
 
+        // An added GIF is marked animated for the same reason a copied one is:
+        // the stored thumbnail is a single still frame, so the card needs to be
+        // told that a moving original exists before it will ever ask for it.
+        let sub_kind = if kind == Kind::Image && ext.as_deref() == Some("GIF") {
+            Some(SubKind::Animated)
+        } else {
+            None
+        };
+
         let hash = compute_hash(path_str.as_bytes());
 
         // Check if reference already exists
@@ -620,7 +654,7 @@ pub fn add_references(conn: &Connection, root: &Path, paths: &[String]) -> AppRe
                 ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1, ?16, ?16, NULL, 0)",
                 rusqlite::params![
                     kind.as_str(),
-                    Option::<String>::None,
+                    sub_kind.map(|s| s.as_str().to_string()),
                     hash,
                     Option::<String>::None,
                     thumb_path,

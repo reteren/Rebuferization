@@ -180,11 +180,15 @@
       {/if}
     {:else if item.kind === 'video'}
       {#if showThumb}
+        <!-- A still frame is the whole preview. The play glyph is what a video
+             card falls back to when there is no frame to show, not something
+             stamped on top of one. -->
         <img class="thumb" src={imgSrc!} alt="" draggable="false" decoding="async" onerror={onImgError} />
+      {:else}
+        <span class="play" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="13" height="13"><path d="M8.2 5.6v12.8L19 12z" fill="currentColor" /></svg>
+        </span>
       {/if}
-      <span class="play" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="13" height="13"><path d="M8.2 5.6v12.8L19 12z" fill="currentColor" /></svg>
-      </span>
     {:else if item.kind === 'text'}
       {#if item.subKind === 'link'}
         <!-- A link that was looked up (privacy.linkPreviews) has the page's
