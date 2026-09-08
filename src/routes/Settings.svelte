@@ -617,6 +617,28 @@ function resetEverything(): void {
 
         <div class="field">
           <label class="field-label">
+            Keep extracted files for
+            <span class="row">
+              <input
+                type="number"
+                min={1}
+                max={90}
+                value={settings.current.storage.tempFilesDays}
+                onchange={(e) =>
+                  patch({ storage: { tempFilesDays: clampInt(e.currentTarget.value, 1, 90) } })}
+              />
+              <span>days</span>
+            </span>
+          </label>
+          <p class="hint">
+            An item that exists only as clipboard data has no file until you open it, reveal it or
+            drag it out. One is written for you then, and this is how long it stays before it is
+            cleaned up.
+          </p>
+        </div>
+
+        <div class="field">
+          <label class="field-label">
             Maximum item size
             <span class="row">
               <input

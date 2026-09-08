@@ -163,15 +163,15 @@ pub fn write_items(store: &Store, ids: &[i64], plain_text: bool) -> AppResult<()
                         }
                     }
                     Kind::File | Kind::Video => {
-                        let paths = if !item.file_names.is_empty() {
-                            // If multiple file paths or ref_path
-                            if let Some(ref p) = item.ref_path {
-                                vec![p.clone()]
-                            } else if let Ok(p) = store.blob_path(id) {
-                                vec![p.to_string_lossy().to_string()]
-                            } else {
-                                vec![]
-                            }
+                        // The captured paths first, all of them. A copy of
+                        // three files has to paste as those three files, and
+                        // the branch this replaced could only ever produce one
+                        // path — for an item copied in Explorer it produced
+                        // none at all, because neither `ref_path` nor a blob
+                        // exists for one.
+                        let captured = store.file_paths(id).unwrap_or_default();
+                        let paths = if !captured.is_empty() {
+                            captured
                         } else if let Some(ref p) = item.ref_path {
                             vec![p.clone()]
                         } else if let Ok(p) = store.blob_path(id) {
@@ -206,7 +206,10 @@ pub fn write_items(store: &Store, ids: &[i64], plain_text: bool) -> AppResult<()
         if all_files && !plain_text {
             let mut paths = Vec::new();
             for it in &items {
-                if let Some(ref p) = it.ref_path {
+                let captured = store.file_paths(it.id).unwrap_or_default();
+                if !captured.is_empty() {
+                    paths.extend(captured);
+                } else if let Some(ref p) = it.ref_path {
                     paths.push(p.clone());
                 } else if let Ok(p) = store.blob_path(it.id) {
                     paths.push(p.to_string_lossy().to_string());

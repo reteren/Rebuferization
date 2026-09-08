@@ -40,6 +40,7 @@ export const DEFAULT_SETTINGS: Settings = {
   storage: {
     path: '',
     retentionDays: 30,
+    tempFilesDays: 7,
     maxItemBytes: 256 * 1024 * 1024,
     maxStoreBytes: null,
     notifyWhenFull: true,

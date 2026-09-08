@@ -256,6 +256,10 @@ pub fn update_settings(
         }
     }
 
+    if next.storage.temp_files_days != before.storage.temp_files_days {
+        crate::shell::set_temp_files_days(next.storage.temp_files_days);
+    }
+
     if next.storage.retention_days != before.storage.retention_days
         || next.storage.max_store_bytes != before.storage.max_store_bytes
     {

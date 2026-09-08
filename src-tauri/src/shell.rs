@@ -6,12 +6,12 @@
 //! materializing captured blobs to temp files with sensible names first.
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use windows::core::{implement, BOOL, HRESULT, PCWSTR};
@@ -268,24 +268,90 @@ pub fn reveal(path: &Path) -> AppResult<()> {
 /// the same "clean leftovers from a previous, possibly crashed run" idea as
 /// the store's startup integrity sweep.
 static SESSION_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
-/// item id → materialized temp file, so dragging the same item twice reuses
-/// the file instead of copying the blob again.
-static SESSION_CACHE: Mutex<Option<HashMap<i64, PathBuf>>> = Mutex::new(None);
 
 /// Resolves the session scratch directory, cleaning stale materialized files
 /// from a previous run the first time it is used this session.
 fn session_dir() -> AppResult<PathBuf> {
-    let mut guard = SESSION_DIR.lock();
-    if let Some(dir) = guard.as_ref() {
-        return Ok(dir.clone());
-    }
-    let dir = std::env::temp_dir().join("rebuffer-drag");
-    if dir.exists() {
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-    std::fs::create_dir_all(&dir)?;
-    *guard = Some(dir.clone());
+    let dir = {
+        let mut guard = SESSION_DIR.lock();
+        match guard.as_ref() {
+            Some(dir) => dir.clone(),
+            None => {
+                let dir = std::env::temp_dir().join("rebuffer-drag");
+                std::fs::create_dir_all(&dir)?;
+                *guard = Some(dir.clone());
+                dir
+            }
+        }
+    };
+    sweep_expired(&dir);
     Ok(dir)
+}
+
+/// How long an extracted file is kept, in days. Mirrors
+/// `settings.storage.tempFilesDays`; pushed here by the settings path because
+/// this module has no store and no `AppHandle` to read one from.
+static TEMP_FILES_DAYS: AtomicU32 = AtomicU32::new(7);
+
+/// When the folder was last swept, as unix milliseconds, so a process that
+/// stays up for weeks still expires files without stat-ing the whole folder on
+/// every single drag.
+static LAST_SWEEP_MS: AtomicU64 = AtomicU64::new(0);
+
+const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
+
+pub fn set_temp_files_days(days: u32) {
+    TEMP_FILES_DAYS.store(days.clamp(1, 90), Ordering::SeqCst);
+}
+
+/// Deletes extracted files older than the configured age.
+///
+/// This replaced wiping the folder on first use. That was correct while the
+/// files only had to outlive a drag, but the same folder is what "Show in
+/// folder" and "Open" hand the user for an item that has no file of its own —
+/// a screenshot, most of the time — and wiping it on the next launch took that
+/// file out from under them. Age is read from the file's own mtime rather than
+/// a manifest: the folder holds nothing else, and a file that a later drag
+/// reused is worth keeping for another week anyway.
+///
+/// Nothing here is allowed to fail loudly. A file another process still has
+/// open simply survives to the next sweep.
+fn sweep_expired(dir: &Path) {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let last = LAST_SWEEP_MS.load(Ordering::SeqCst);
+    if last != 0 && now_ms.saturating_sub(last) < SWEEP_EVERY.as_millis() as u64 {
+        return;
+    }
+    LAST_SWEEP_MS.store(now_ms, Ordering::SeqCst);
+
+    let max_age = Duration::from_secs(u64::from(TEMP_FILES_DAYS.load(Ordering::SeqCst)) * 86_400);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let expired = meta
+            .modified()
+            .ok()
+            .and_then(|m| SystemTime::now().duration_since(m).ok())
+            .is_some_and(|age| age > max_age);
+        if expired && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        tracing::info!(
+            "extracted files: removed {removed} older than {} days",
+            TEMP_FILES_DAYS.load(Ordering::SeqCst)
+        );
+    }
 }
 
 /// Resolves every id to a real file on disk: a reference resolves to its own
@@ -300,6 +366,25 @@ fn resolve_paths(store: &Store, ids: &[i64]) -> AppResult<Vec<PathBuf>> {
     let mut paths = Vec::with_capacity(ids.len());
     for &id in ids {
         let item = store.get(id)?;
+
+        // A file copied in Explorer is already a real file with a real name
+        // where the user put it. Opening or revealing the original is what they
+        // mean; materializing a copy of it under the scratch folder would show
+        // them a stranger in a temp directory instead of the file they copied.
+        // Every path is taken, not just the first, so a multi-file copy drags
+        // and pastes as the whole set it was.
+        let captured = store.file_paths(id)?;
+        if !captured.is_empty() {
+            for p in captured {
+                let pb = PathBuf::from(&p);
+                if !pb.exists() {
+                    return Err(AppError::Other(format!("file is gone: {}", pb.display())));
+                }
+                paths.push(pb);
+            }
+            continue;
+        }
+
         let path = if item.is_reference {
             let p = item.ref_path.ok_or_else(|| {
                 AppError::Other(format!("item {id} is a reference but has no path"))
@@ -329,44 +414,120 @@ fn resolve_paths(store: &Store, ids: &[i64]) -> AppResult<Vec<PathBuf>> {
                     "stored file is missing for item {id}"
                 )));
             }
-            materialize_blob(&blob, &item)?
+            materialize_blob(store, &blob, &item)?
         };
         paths.push(path);
     }
     Ok(paths)
 }
 
-/// Materializes a blob into the session scratch folder, reusing the file when
-/// the same item is dragged again.
-fn materialize_blob(blob: &Path, item: &ItemDto) -> AppResult<PathBuf> {
+/// Materializes a blob into the scratch folder under the item's own permanent
+/// name, writing the file only if it is not already there.
+fn materialize_blob(store: &Store, blob: &Path, item: &ItemDto) -> AppResult<PathBuf> {
     let dir = session_dir()?;
-    let mut guard = SESSION_CACHE.lock();
-    // HashMap::new is not const, so the static holds None until first use.
-    let cache = guard.get_or_insert_with(HashMap::new);
-    materialize_into(&dir, cache, blob, item)
+    let name = extracted_name(store, &dir, blob, item)?;
+    materialize_into(&dir, &name, blob)
 }
+
+/// The name this item's extracted file has, assigning one the first time.
+///
+/// Assigned once and then kept for good, in the database. Deriving it afresh
+/// each time is what produced `screenshot.png`, `screenshot-1.png` and
+/// `screenshot-2.png` for one and the same picture: every run found the name it
+/// had used last time still on disk, failed to recognise it as its own, and
+/// stepped around it. The record also works in the other direction, which is
+/// the half a filesystem check can never cover — once a name belongs to an
+/// item it is never given to another one, even after the file has been deleted
+/// or has aged out of the folder.
+fn extracted_name(store: &Store, dir: &Path, blob: &Path, item: &ItemDto) -> AppResult<String> {
+    if let Some(name) = store.extracted_name(item.id)? {
+        return Ok(name);
+    }
+    let base = temp_file_name(item);
+    for n in 0..MAX_NAME_ATTEMPTS {
+        let candidate = if n == 0 {
+            base.clone()
+        } else {
+            suffixed(&base, n)
+        };
+        // A file already sitting under this name and holding something else is
+        // almost certainly an extraction from before names were recorded.
+        // Claiming the name would mean overwriting a picture the user may still
+        // have open, so those are stepped around exactly as a taken name is.
+        let on_disk = dir.join(&candidate);
+        if on_disk.exists() && !same_contents(&on_disk, blob) {
+            continue;
+        }
+        if store.try_claim_extracted_name(item.id, &candidate)? {
+            return Ok(candidate);
+        }
+    }
+    Err(AppError::Other(format!(
+        "could not find a free name for item {}",
+        item.id
+    )))
+}
+
+/// How many suffixed variants to try before giving up. Far beyond anything a
+/// real folder reaches; it exists so a bug cannot spin forever.
+const MAX_NAME_ATTEMPTS: u32 = 10_000;
 
 /// The pure core of `materialize_blob`, factored out so it can be unit-tested
 /// with a scratch dir instead of the real session folder.
-fn materialize_into(
-    dir: &Path,
-    cache: &mut HashMap<i64, PathBuf>,
-    blob: &Path,
-    item: &ItemDto,
-) -> AppResult<PathBuf> {
-    if let Some(existing) = cache.get(&item.id) {
-        return Ok(existing.clone());
+///
+/// The name is decided by the caller and is stable for the life of the item, so
+/// this only has to put the bytes there — and only when they are not there
+/// already. A file whose content matches is left exactly as it is, timestamp
+/// included, because rewriting it would restart its retention clock and, worse,
+/// swap the file out from under anything the user has open on it.
+fn materialize_into(dir: &Path, name: &str, blob: &Path) -> AppResult<PathBuf> {
+    let target = dir.join(name);
+    if target.exists() && same_contents(&target, blob) {
+        return Ok(target);
     }
-    let name = temp_file_name(item);
-    let mut candidate = dir.join(&name);
-    let mut n = 1u32;
-    while candidate.exists() {
-        candidate = dir.join(suffixed(&name, n));
-        n += 1;
+    std::fs::copy(blob, &target)?;
+    Ok(target)
+}
+
+/// Whether two files hold exactly the same bytes.
+///
+/// Size first, because it settles almost every case without opening anything,
+/// and then a streamed comparison rather than reading both files whole: the
+/// item size cap allows a quarter of a gigabyte, and this runs while the user
+/// waits for a window to open. Any I/O error answers "not the same", which
+/// costs a redundant copy at worst and never hands back the wrong picture.
+fn same_contents(a: &Path, b: &Path) -> bool {
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    if ma.len() != mb.len() {
+        return false;
     }
-    std::fs::copy(blob, &candidate)?;
-    cache.insert(item.id, candidate.clone());
-    Ok(candidate)
+    let (Ok(fa), Ok(fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    let mut ra = std::io::BufReader::new(fa);
+    let mut rb = std::io::BufReader::new(fb);
+    let mut buf_a = [0u8; 16 * 1024];
+    let mut buf_b = [0u8; 16 * 1024];
+    loop {
+        let read_a = match std::io::Read::read(&mut ra, &mut buf_a) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if read_a == 0 {
+            return true;
+        }
+        // `read` is free to return less than the buffer, and the two files can
+        // split their reads differently, so the second side is filled exactly
+        // to the length the first produced instead of being compared blindly.
+        if std::io::Read::read_exact(&mut rb, &mut buf_b[..read_a]).is_err() {
+            return false;
+        }
+        if buf_a[..read_a] != buf_b[..read_a] {
+            return false;
+        }
+    }
 }
 
 /// A sensible filename for a materialized blob: the sanitized `title` when
@@ -762,6 +923,62 @@ fn run_drag(buffer: Vec<u8>) {
 
 #[cfg(test)]
 mod tests {
+    /// The folder used to be wiped whole on first use, which took a screenshot
+    /// the user had opened from history out from under them on the next launch.
+    /// It now expires by age instead, so both halves are worth pinning: a fresh
+    /// file survives a sweep, and a stale one does not.
+    #[test]
+    fn sweep_keeps_fresh_files_and_removes_stale_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("screenshot.png");
+        std::fs::write(&file, b"x").unwrap();
+
+        // A week's worth of retention leaves a file written a moment ago alone.
+        TEMP_FILES_DAYS.store(90, Ordering::SeqCst);
+        LAST_SWEEP_MS.store(0, Ordering::SeqCst);
+        sweep_expired(dir.path());
+        assert!(
+            file.exists(),
+            "a file just written must survive the sweep; wiping the folder is what this replaced"
+        );
+
+        // Zero days makes everything already older than the limit. Stored
+        // straight into the atomic because `set_temp_files_days` clamps to at
+        // least one day, which is the right floor for a real setting and the
+        // wrong one for showing that expiry happens at all.
+        TEMP_FILES_DAYS.store(0, Ordering::SeqCst);
+        LAST_SWEEP_MS.store(0, Ordering::SeqCst);
+        sweep_expired(dir.path());
+        assert!(!file.exists(), "a file past its age must be removed");
+
+        TEMP_FILES_DAYS.store(7, Ordering::SeqCst);
+        LAST_SWEEP_MS.store(0, Ordering::SeqCst);
+    }
+
+    /// The throttle exists so a long-running process still expires files
+    /// without stat-ing the folder on every drag; it must not skip the first
+    /// sweep of a session.
+    #[test]
+    fn sweep_is_throttled_after_the_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("stale.png");
+        std::fs::write(&file, b"x").unwrap();
+
+        TEMP_FILES_DAYS.store(0, Ordering::SeqCst);
+        LAST_SWEEP_MS.store(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+            Ordering::SeqCst,
+        );
+        sweep_expired(dir.path());
+        assert!(file.exists(), "a sweep that just ran must not run again");
+
+        TEMP_FILES_DAYS.store(7, Ordering::SeqCst);
+        LAST_SWEEP_MS.store(0, Ordering::SeqCst);
+    }
+
     use super::*;
     use tempfile::tempdir;
     // Only the header-layout test needs POINT, so it lives here rather than in
@@ -975,56 +1192,111 @@ mod tests {
     }
 
     #[test]
-    fn test_materialize_reuses_same_item() {
+    fn test_materialize_writes_once_and_reuses_the_file() {
         let dir = tempdir().unwrap();
         let blob = dir.path().join("blob-src");
         std::fs::write(&blob, b"payload").unwrap();
-        let mut cache = HashMap::new();
-        let it = item(7, Some("same"), Some("PNG"), None);
 
-        let first = materialize_into(dir.path(), &mut cache, &blob, &it).unwrap();
-        assert!(first.exists());
+        let first = materialize_into(dir.path(), "shot.png", &blob).unwrap();
         assert_eq!(std::fs::read(&first).unwrap(), b"payload");
-        assert_eq!(first.file_name().unwrap(), "same.png");
+        let written_at = std::fs::metadata(&first).unwrap().modified().unwrap();
 
-        let second = materialize_into(dir.path(), &mut cache, &blob, &it).unwrap();
-        assert_eq!(second, first, "same item must reuse its materialized file");
-        assert_eq!(cache.len(), 1);
+        // Same name, same bytes: the file must be left exactly as it is, so its
+        // retention clock is not restarted and nothing is swapped out from
+        // under a program that has it open.
+        let second = materialize_into(dir.path(), "shot.png", &blob).unwrap();
+        assert_eq!(second, first);
+        assert_eq!(
+            std::fs::metadata(&second).unwrap().modified().unwrap(),
+            written_at
+        );
     }
 
     #[test]
-    fn test_materialize_suffixes_name_collisions() {
+    fn test_materialize_replaces_a_file_whose_content_no_longer_matches() {
         let dir = tempdir().unwrap();
-        let blob_a = dir.path().join("blob-a");
-        let blob_b = dir.path().join("blob-b");
+        let blob = dir.path().join("blob-src");
+        std::fs::write(&blob, b"new").unwrap();
+        std::fs::write(dir.path().join("shot.png"), b"stale").unwrap();
+
+        let out = materialize_into(dir.path(), "shot.png", &blob).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"new");
+    }
+
+    /// A name belongs to one item for good. The second item wanting the same
+    /// base name is given a suffixed one, and — the half a filesystem check
+    /// cannot cover — the first item keeps its name even after its file is
+    /// deleted, so the name can never be handed over.
+    #[test]
+    fn test_extracted_name_is_assigned_once_and_never_reused() {
+        let store_dir = tempdir().unwrap();
+        let store = crate::store::Store::open(store_dir.path()).unwrap();
+        let out = tempdir().unwrap();
+
+        let a = store
+            .insert_capture(crate::capture::Capture::text("first"))
+            .unwrap();
+        let b = store
+            .insert_capture(crate::capture::Capture::text("second"))
+            .unwrap();
+        let blob_a = out.path().join("a-src");
+        let blob_b = out.path().join("b-src");
         std::fs::write(&blob_a, b"aaa").unwrap();
         std::fs::write(&blob_b, b"bbb").unwrap();
-        let mut cache = HashMap::new();
 
-        let a = materialize_into(
-            dir.path(),
-            &mut cache,
-            &blob_a,
-            &item(1, Some("same"), Some("png"), None),
-        )
-        .unwrap();
-        let b = materialize_into(
-            dir.path(),
-            &mut cache,
-            &blob_b,
-            &item(2, Some("same"), Some("png"), None),
-        )
-        .unwrap();
-        assert_eq!(a.file_name().unwrap(), "same.png");
-        assert_eq!(b.file_name().unwrap(), "same-1.png");
-        assert_eq!(std::fs::read(&b).unwrap(), b"bbb");
+        let name_a = extracted_name(&store, out.path(), &blob_a, &a).unwrap();
+        let name_b = extracted_name(&store, out.path(), &blob_b, &b).unwrap();
+        assert_ne!(name_a, name_b, "two items must never share one name");
 
-        let c =
-            materialize_into(dir.path(), &mut cache, &blob_b, &item(3, None, None, None)).unwrap();
-        assert!(c
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with("rebuffer-"));
+        // Asked again, each item gets the very same name back.
+        assert_eq!(
+            extracted_name(&store, out.path(), &blob_a, &a).unwrap(),
+            name_a
+        );
+        assert_eq!(
+            extracted_name(&store, out.path(), &blob_b, &b).unwrap(),
+            name_b
+        );
+
+        // And after the file is gone, the name is still that item's alone: a
+        // third item asking for the same base name cannot be given it.
+        let path_a = materialize_into(out.path(), &name_a, &blob_a).unwrap();
+        std::fs::remove_file(&path_a).unwrap();
+        let c = store
+            .insert_capture(crate::capture::Capture::text("third"))
+            .unwrap();
+        let blob_c = out.path().join("c-src");
+        std::fs::write(&blob_c, b"ccc").unwrap();
+        let name_c = extracted_name(&store, out.path(), &blob_c, &c).unwrap();
+        assert_ne!(name_c, name_a, "a deleted file must not free its name");
+        assert_eq!(
+            extracted_name(&store, out.path(), &blob_a, &a).unwrap(),
+            name_a,
+            "and the original item still answers with it"
+        );
+    }
+
+    /// A file left in the folder by a version that did not record names must
+    /// not be overwritten by whichever item happens to ask first.
+    #[test]
+    fn test_extracted_name_steps_around_an_unrecorded_file() {
+        let store_dir = tempdir().unwrap();
+        let store = crate::store::Store::open(store_dir.path()).unwrap();
+        let out = tempdir().unwrap();
+        let item = store
+            .insert_capture(crate::capture::Capture::text("hello"))
+            .unwrap();
+
+        let blob = out.path().join("src");
+        std::fs::write(&blob, b"mine").unwrap();
+        let base = temp_file_name(&item);
+        std::fs::write(out.path().join(&base), b"someone else's").unwrap();
+
+        let name = extracted_name(&store, out.path(), &blob, &item).unwrap();
+        assert_ne!(name, base, "an unrecognised file must not be taken over");
+        assert_eq!(
+            std::fs::read(out.path().join(&base)).unwrap(),
+            b"someone else's"
+        );
     }
 }

@@ -290,6 +290,7 @@ Stored as `settings.json` next to the database, hot-reloaded on change, validate
   "storage": {
     "path": "%APPDATA%\\Rebuffer",
     "retentionDays": 30,          // 1–30
+    "tempFilesDays": 7,           // 1–90; how long a file extracted from an item is kept
     "maxItemBytes": 268435456,    // 256 MB
     "maxStoreBytes": null,        // null = unlimited; warns at 90%, prunes at 100%
     "notifyWhenFull": true

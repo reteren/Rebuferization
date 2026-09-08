@@ -428,7 +428,61 @@ pub fn get_blob_path(conn: &Connection, root: &Path, id: i64) -> AppResult<PathB
         }
     }
 
+    // A file copied in Explorer has neither: nothing was written into the
+    // store, and it is not a shelf reference either. Its only trace is the
+    // path in `item_files`, and every action on the item — open, open with,
+    // show in folder, save as, paste back — asks this one function where the
+    // file is. Without this fall-through they all answered "item N has no
+    // stored file", which is how a card that is plainly a picture of a real
+    // file ends up being something the user can only look at.
+    if let Some(first) = get_file_paths(conn, id)?.into_iter().next() {
+        return Ok(PathBuf::from(first));
+    }
+
     Err(AppError::NotFound(id))
+}
+
+/// The name this item's extracted file was given, if it has ever been asked for.
+pub fn get_extracted_name(conn: &Connection, id: i64) -> AppResult<Option<String>> {
+    let name = conn
+        .query_row(
+            "SELECT extracted_name FROM items WHERE id = ?1",
+            [id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(name)
+}
+
+/// Tries to record `name` as this item's extracted file name.
+///
+/// Returns `false` when another item already holds that name, which is the
+/// caller's signal to try the next one. The decision is the unique index's to
+/// make, not ours: two items reaching for the same name at the same moment must
+/// not both be told they got it.
+pub fn try_claim_extracted_name(conn: &Connection, id: i64, name: &str) -> AppResult<bool> {
+    match conn.execute(
+        "UPDATE items SET extracted_name = ?1 WHERE id = ?2",
+        rusqlite::params![name, id],
+    ) {
+        Ok(_) => Ok(true),
+        Err(rusqlite::Error::SqliteFailure(e, _))
+            if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            Ok(false)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Every path a `CF_HDROP` capture carried, in the order they were dropped.
+/// Empty for every other kind of item.
+pub fn get_file_paths(conn: &Connection, id: i64) -> AppResult<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT path FROM item_files WHERE item_id = ?1 ORDER BY position ASC")?;
+    let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
 /// Retrieves all stored clipboard formats for an item.

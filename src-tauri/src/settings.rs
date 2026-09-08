@@ -46,6 +46,15 @@ pub struct StorageSettings {
     pub path: String,
     /// 1..=30.
     pub retention_days: u32,
+    /// How long a file extracted from an item is kept, in days, 1..=90.
+    ///
+    /// An item that exists only as clipboard bytes — a screenshot, most of the
+    /// time — has no file anywhere until the user asks to open it, reveal it or
+    /// drag it out. One is written for them at that moment, and this is how
+    /// long it stays. The whole folder used to be wiped on the next launch,
+    /// which meant a screenshot the user had opened from history was gone from
+    /// under whatever they had done with it.
+    pub temp_files_days: u32,
     pub max_item_bytes: u64,
     /// `None` = unlimited.
     pub max_store_bytes: Option<u64>,
@@ -141,6 +150,7 @@ impl Default for StorageSettings {
         StorageSettings {
             path: String::new(),
             retention_days: 30,
+            temp_files_days: 7,
             max_item_bytes: 256 * 1024 * 1024,
             max_store_bytes: None,
             notify_when_full: true,
@@ -265,6 +275,7 @@ const THEMES: [&str; 11] = [
 /// (`sanitize_json`); this catches anything the type system let through.
 pub fn validate(s: &mut Settings) {
     s.storage.retention_days = s.storage.retention_days.clamp(1, 30);
+    s.storage.temp_files_days = s.storage.temp_files_days.clamp(1, 90);
     s.window.zoom_step = s.window.zoom_step.clamp(1, 5);
     s.window.percent_of_monitor = s.window.percent_of_monitor.clamp(10, 100);
     // Empty means "follow the theme's accent", which is the default; only a
@@ -935,6 +946,22 @@ mod tests {
         assert_eq!(s.storage.retention_days, 30);
         let v = sanitized(json!({ "storage": { "retentionDays": 0 } }));
         assert_eq!(as_settings(v).storage.retention_days, 1);
+    }
+
+    #[test]
+    fn clamps_temp_files_days() {
+        let v = sanitized(json!({ "storage": { "tempFilesDays": 400 } }));
+        assert_eq!(as_settings(v).storage.temp_files_days, 90);
+        let v = sanitized(json!({ "storage": { "tempFilesDays": 0 } }));
+        assert_eq!(as_settings(v).storage.temp_files_days, 1);
+    }
+
+    #[test]
+    fn temp_files_days_defaults_to_a_week() {
+        // A settings file written before this field existed must not turn the
+        // retention into zero days and start deleting on sight.
+        let v = sanitized(json!({ "storage": { "retentionDays": 30 } }));
+        assert_eq!(as_settings(v).storage.temp_files_days, 7);
     }
 
     #[test]

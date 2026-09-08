@@ -723,6 +723,24 @@ impl Store {
         queries::get_blob_path(&conn, &root, id)
     }
 
+    /// Every path a file capture carried. Empty for anything else.
+    pub fn file_paths(&self, id: i64) -> AppResult<Vec<String>> {
+        let conn = self.conn();
+        queries::get_file_paths(&conn, id)
+    }
+
+    /// The name this item's extracted file was given, if it has one yet.
+    pub fn extracted_name(&self, id: i64) -> AppResult<Option<String>> {
+        let conn = self.conn();
+        queries::get_extracted_name(&conn, id)
+    }
+
+    /// Records `name` for this item, or reports that another item holds it.
+    pub fn try_claim_extracted_name(&self, id: i64, name: &str) -> AppResult<bool> {
+        let conn = self.conn();
+        queries::try_claim_extracted_name(&conn, id, name)
+    }
+
     /// Every stored format for an item, in paste-restore order.
     pub fn formats(&self, id: i64) -> AppResult<Vec<(String, Vec<u8>)>> {
         let root = self.root();

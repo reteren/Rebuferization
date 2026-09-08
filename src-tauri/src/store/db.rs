@@ -9,8 +9,12 @@ use rusqlite::Connection;
 use crate::error::AppResult;
 
 const MIGRATION_0001: &str = include_str!("../../migrations/0001_init.sql");
+const MIGRATION_0002: &str = include_str!("../../migrations/0002_extracted_name.sql");
 
-const MIGRATIONS: &[(i64, &str, &str)] = &[(1, "0001_init.sql", MIGRATION_0001)];
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (1, "0001_init.sql", MIGRATION_0001),
+    (2, "0002_extracted_name.sql", MIGRATION_0002),
+];
 
 /// Opens a SQLite database at `db_path`, applies WAL/synchronous/foreign_key PRAGMAs,
 /// and runs all pending migrations. If the database file is corrupted, it moves the corrupt file
@@ -143,7 +147,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "1");
+        // Against the migration list rather than a literal, so adding one does
+        // not mean remembering to come back and edit a number here.
+        let latest = MIGRATIONS.last().unwrap().0;
+        assert_eq!(version, latest.to_string());
 
         let items_exist: bool = conn
             .query_row(
@@ -153,5 +160,53 @@ mod tests {
             )
             .unwrap();
         assert!(items_exist);
+    }
+
+    /// The second migration adds a column to a table that already has rows in
+    /// every existing installation, so the upgrade path matters as much as the
+    /// fresh one: open at version 1, then open again and confirm the column is
+    /// there and empty rather than the database being rebuilt.
+    #[test]
+    fn test_extracted_name_migration_applies_to_an_existing_database() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("rebuffer.db");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(MIGRATION_0001).unwrap();
+            // 0001 records the version itself; force it back to 1 in case a
+            // future edit to that file changes what it writes.
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '1')
+                 ON CONFLICT(key) DO UPDATE SET value = '1'",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO items (kind, hash, byte_size, created_at, first_seen_at)
+                 VALUES ('text', 'abc', 3, 1, 1)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let conn = open_database(&db_path).unwrap();
+        let name: Option<String> = conn
+            .query_row("SELECT extracted_name FROM items LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, None, "an existing row gains the column, empty");
+
+        // And the unique index is live: two rows cannot hold the same name.
+        conn.execute(
+            "INSERT INTO items (kind, hash, byte_size, created_at, first_seen_at, extracted_name)
+             VALUES ('text', 'def', 3, 1, 1, 'shot.png')",
+            [],
+        )
+        .unwrap();
+        let clash = conn.execute(
+            "INSERT INTO items (kind, hash, byte_size, created_at, first_seen_at, extracted_name)
+             VALUES ('text', 'ghi', 3, 1, 1, 'shot.png')",
+            [],
+        );
+        assert!(clash.is_err(), "the same name twice must be refused");
     }
 }

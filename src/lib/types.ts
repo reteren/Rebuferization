@@ -164,6 +164,8 @@ export interface Settings {
   storage: {
     path: string
     retentionDays: number
+    /** How long a file extracted from an item is kept, 1-90. */
+    tempFilesDays: number
     maxItemBytes: number
     maxStoreBytes: number | null
     notifyWhenFull: boolean

@@ -170,6 +170,7 @@ pub fn run() {
                 max_store_bytes: resolved.storage.max_store_bytes.map(|b| b as i64),
             });
             store.set_link_previews(resolved.privacy.link_previews);
+            shell::set_temp_files_days(resolved.storage.temp_files_days);
 
             let emit_handle = handle.clone();
             let clipboard = Arc::new(ClipboardWatcher::start(
