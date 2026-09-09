@@ -56,30 +56,90 @@ const CF_UNICODETEXT: u32 = 13;
 const CF_HDROP: u32 = 15;
 const CF_DIBV5: u32 = 17;
 
-/// Decodes the currently open clipboard contents into a `Capture`.
-/// Assumes the clipboard is already open on this thread.
-pub fn decode_clipboard(max_bytes: u64, source_app: Option<String>) -> AppResult<Option<Capture>> {
+/// What was taken off the clipboard while it was open. Bytes and paths, nothing
+/// else.
+///
+/// The clipboard is a single global lock: while one process holds it open,
+/// every other process trying to write is refused outright with
+/// `CLIPBRD_E_CANT_OPEN`. So the only correct shape for reading it is to copy
+/// what is needed and get out, and every scrap of work that is not a copy
+/// belongs on the other side of `CloseClipboard`.
+///
+/// It did not used to. The whole of decoding ran with the clipboard still held
+/// — a full PNG decode just to learn the image's width, a DIB decoded to RGBA
+/// and re-encoded to PNG, a filesystem stat per dropped file. On a 2560x1440
+/// screenshot that measured 50 ms to 1.3 s of exclusive hold, against 0-9 ms
+/// for Windows' own clipboard-history service on identical data, and it was
+/// enough to make a screenshot tool's own copy fail: WPF gives up after about
+/// a second of retrying. Splitting the read from the work is what this type is
+/// for.
+pub enum RawClipboard {
+    /// Paths only. Their sizes are stat'ed later, off the lock.
+    Files(Vec<String>),
+    /// Already-encoded PNG bytes, exactly as the source app put them there.
+    Png(Vec<u8>),
+    /// A device-independent bitmap, still to be decoded and re-encoded.
+    Dib(Vec<u8>),
+    Text {
+        formats: Vec<CapturedFormat>,
+        plain: Option<String>,
+    },
+}
+
+/// Copies the clipboard's contents out. Assumes the clipboard is open on this
+/// thread, and is the only part of capture that runs while it is.
+///
+/// One image format is taken, never both: a screenshot tool usually offers PNG
+/// and a DIB of the same picture, and taking the second doubles the hold for a
+/// copy of something already in hand.
+pub fn grab_clipboard(max_bytes: u64) -> AppResult<Option<RawClipboard>> {
     // Priority 1: CF_HDROP
     if is_format_available(CF_HDROP) {
-        if let Some(mut cap) = decode_hdrop(max_bytes)? {
-            cap.source_app = source_app;
-            return Ok(Some(cap));
+        if let Some(paths) = grab_hdrop_paths() {
+            return Ok(Some(RawClipboard::Files(paths)));
         }
     }
 
     // Priority 2: Images (PNG / CF_DIBV5 / CF_DIB)
-    if let Some(mut cap) = decode_image(max_bytes)? {
-        cap.source_app = source_app;
-        return Ok(Some(cap));
+    if let Some(raw) = grab_image(max_bytes)? {
+        return Ok(Some(raw));
     }
 
     // Priority 3, 4, 5: Text formats (HTML, RTF, UnicodeText)
-    if let Some(mut cap) = decode_text(max_bytes)? {
-        cap.source_app = source_app;
-        return Ok(Some(cap));
+    if let Some(raw) = grab_text(max_bytes) {
+        return Ok(Some(raw));
     }
 
     Ok(None)
+}
+
+/// Turns what was copied into a `Capture`. Runs with the clipboard closed, and
+/// so may take as long as it likes.
+pub fn build_capture(
+    raw: RawClipboard,
+    max_bytes: u64,
+    source_app: Option<String>,
+) -> AppResult<Option<Capture>> {
+    let built = match raw {
+        RawClipboard::Files(paths) => build_files_capture(paths, max_bytes)?,
+        RawClipboard::Png(bytes) => build_png_capture(bytes),
+        RawClipboard::Dib(bytes) => build_dib_capture(&bytes)?,
+        RawClipboard::Text { formats, plain } => build_text_capture(formats, plain),
+    };
+    Ok(built.map(|mut cap| {
+        cap.source_app = source_app;
+        cap
+    }))
+}
+
+/// Copies the contents and decodes them in one go, for callers that are not on
+/// the listener's hot path — the tests, and the debug capture command.
+#[cfg(test)]
+pub fn decode_clipboard(max_bytes: u64, source_app: Option<String>) -> AppResult<Option<Capture>> {
+    match grab_clipboard(max_bytes)? {
+        Some(raw) => build_capture(raw, max_bytes, source_app),
+        None => Ok(None),
+    }
 }
 
 fn is_format_available(format: u32) -> bool {
@@ -92,24 +152,25 @@ fn is_format_available(format: u32) -> bool {
     }
 }
 
-/// Decodes `CF_HDROP` files.
-fn decode_hdrop(max_bytes: u64) -> AppResult<Option<Capture>> {
+/// Copies the dropped paths off the clipboard. Nothing is stat'ed here: a
+/// filesystem call per file, inside the global lock, is exactly the kind of
+/// work that has no business being there — a path on a slow or disconnected
+/// network drive would hold every other process out for as long as the stat
+/// took to time out.
+fn grab_hdrop_paths() -> Option<Vec<String>> {
     unsafe {
         // Sound: Caller holds open clipboard lock; retrieves handle for CF_HDROP format owned by Windows.
         let handle = match GetClipboardData(CF_HDROP) {
             Ok(h) if !h.0.is_null() => h,
-            _ => return Ok(None),
+            _ => return None,
         };
         let hdrop = HDROP(handle.0);
         // Sound: Passing 0xFFFFFFFF queries the total count of dropped file paths.
         let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
         if count == 0 {
-            return Ok(None);
+            return None;
         }
-
-        let mut files = Vec::with_capacity(count as usize);
-        let mut total_bytes: u64 = 0;
-
+        let mut paths = Vec::with_capacity(count as usize);
         for i in 0..count {
             // Sound: Passing None for buffer queries required length (in chars) for file path at index i.
             let len = DragQueryFileW(hdrop, i, None);
@@ -122,8 +183,25 @@ fn decode_hdrop(max_bytes: u64) -> AppResult<Option<Capture>> {
             if copied == 0 {
                 continue;
             }
-            let actual_copied = (copied as usize).min(buf.len());
-            let path_str = String::from_utf16_lossy(&buf[..actual_copied]);
+            let actual = (copied as usize).min(buf.len());
+            paths.push(String::from_utf16_lossy(&buf[..actual]));
+        }
+        if paths.is_empty() {
+            None
+        } else {
+            Some(paths)
+        }
+    }
+}
+
+/// Builds the file capture from paths already copied off the clipboard. Runs
+/// with the clipboard closed, which is why the stat per file is safe here.
+fn build_files_capture(paths: Vec<String>, max_bytes: u64) -> AppResult<Option<Capture>> {
+    {
+        let mut files = Vec::with_capacity(paths.len());
+        let mut total_bytes: u64 = 0;
+
+        for path_str in paths {
             let file_name = Path::new(&path_str)
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -206,42 +284,22 @@ fn decode_hdrop(max_bytes: u64) -> AppResult<Option<Capture>> {
     }
 }
 
-/// Decodes image formats (`PNG`, `CF_DIBV5`, `CF_DIB`).
-fn decode_image(max_bytes: u64) -> AppResult<Option<Capture>> {
-    // 1. Try registered PNG format
+/// Copies one image format off the clipboard: PNG if the source offered it,
+/// otherwise a DIB.
+///
+/// Only one. A screenshot tool typically publishes both, and they are the same
+/// picture; copying the second would double the time the clipboard stays shut
+/// to everyone else for no gain. PNG is preferred because it is already
+/// encoded — the DIB path has to be decoded and re-encoded afterwards.
+fn grab_image(max_bytes: u64) -> AppResult<Option<RawClipboard>> {
     for &png_fmt in &[*FORMAT_PNG, *FORMAT_IMAGE_PNG] {
         if is_format_available(png_fmt) {
             if let Some(png_bytes) = read_raw_clipboard_bytes(png_fmt, max_bytes) {
-                if let Ok(img) = image::load_from_memory(&png_bytes) {
-                    let w = img.width() as i64;
-                    let h = img.height() as i64;
-                    let sub_kind = if classify::is_animated_image(&png_bytes) {
-                        Some(SubKind::Animated)
-                    } else {
-                        None
-                    };
-                    return Ok(Some(Capture {
-                        kind: Kind::Image,
-                        sub_kind,
-                        primary: Some(png_bytes),
-                        formats: Vec::new(),
-                        files: Vec::new(),
-                        preview_text: None,
-                        ext: Some("PNG".into()),
-                        mime: Some("image/png".into()),
-                        width: Some(w),
-                        height: Some(h),
-                        duration_ms: None,
-                        source_app: None,
-                        is_reference: false,
-                        ref_path: None,
-                    }));
-                }
+                return Ok(Some(RawClipboard::Png(png_bytes)));
             }
         }
     }
 
-    // 2. Try CF_DIBV5 or CF_DIB
     let dib_format = if is_format_available(CF_DIBV5) {
         Some(CF_DIBV5)
     } else if is_format_available(CF_DIB) {
@@ -250,179 +308,177 @@ fn decode_image(max_bytes: u64) -> AppResult<Option<Capture>> {
         None
     };
 
-    if let Some(fmt) = dib_format {
-        unsafe {
-            // Sound: Caller holds open clipboard lock; retrieves handle for DIB format owned by Windows.
-            let handle = match GetClipboardData(fmt) {
-                Ok(h) if !h.0.is_null() => h,
-                _ => return Ok(None),
-            };
-            let hglobal = HGLOBAL(handle.0);
-            // Sound: GlobalSize queries byte length of allocated global clipboard memory.
-            let total_size = GlobalSize(hglobal);
-            if total_size < 40 {
-                return Ok(None);
-            }
-            // Sound: GlobalLock acquires pointer to global memory block valid until GlobalUnlock.
-            let ptr = GlobalLock(hglobal);
-            if ptr.is_null() {
-                return Ok(None);
-            }
+    let Some(fmt) = dib_format else {
+        return Ok(None);
+    };
 
-            // Sound: ptr is valid for total_size bytes while locked by GlobalLock.
-            let slice = std::slice::from_raw_parts(ptr as *const u8, total_size);
-
-            if slice.len() < 40 {
-                // Sound: GlobalUnlock releases lock on hglobal before early return.
-                let _ = GlobalUnlock(hglobal);
-                return Ok(None);
-            }
-
-            // Verify size limit from header BEFORE decoding full buffer with overflow protection
-            let bi_width_raw = match read_i32_le(&slice[4..8]) {
-                Some(w) => w,
-                None => {
-                    let _ = GlobalUnlock(hglobal);
-                    return Ok(None);
-                }
-            };
-            let bi_height_raw = match read_i32_le(&slice[8..12]) {
-                Some(h) => h,
-                None => {
-                    let _ = GlobalUnlock(hglobal);
-                    return Ok(None);
-                }
-            };
-            let bi_bit_count = match read_u16_le(&slice[14..16]) {
-                Some(b) => b as u64,
-                None => {
-                    let _ = GlobalUnlock(hglobal);
-                    return Ok(None);
-                }
-            };
-
-            let bi_width = match bi_width_raw.checked_abs() {
-                Some(w) if w > 0 => w as u64,
-                _ => {
-                    let _ = GlobalUnlock(hglobal);
-                    return Ok(None);
-                }
-            };
-            let bi_height = match bi_height_raw.checked_abs() {
-                Some(h) if h > 0 => h as u64,
-                _ => {
-                    let _ = GlobalUnlock(hglobal);
-                    return Ok(None);
-                }
-            };
-
-            if bi_bit_count == 0 || !matches!(bi_bit_count, 1 | 4 | 8 | 16 | 24 | 32) {
-                let _ = GlobalUnlock(hglobal);
-                return Ok(None);
-            }
-
-            let bits_per_row = match bi_width.checked_mul(bi_bit_count) {
-                Some(bits) => bits,
-                None => {
-                    let _ = GlobalUnlock(hglobal);
-                    return Ok(None);
-                }
-            };
-
-            let row_stride = match bits_per_row.checked_add(31).map(|b| (b / 32) * 4) {
-                Some(stride) => stride,
-                None => {
-                    let _ = GlobalUnlock(hglobal);
-                    return Ok(None);
-                }
-            };
-
-            let estimated_pixel_bytes = match row_stride.checked_mul(bi_height) {
-                Some(p) => p,
-                None => {
-                    let _ = GlobalUnlock(hglobal);
-                    return Ok(None);
-                }
-            };
-
-            if estimated_pixel_bytes > max_bytes || (total_size as u64) > max_bytes {
-                // Sound: GlobalUnlock releases lock on hglobal before returning error.
-                let _ = GlobalUnlock(hglobal);
-                return Err(AppError::TooLarge(
-                    estimated_pixel_bytes.max(total_size as u64),
-                ));
-            }
-
-            let dib_bytes = slice.to_vec();
-            // Sound: GlobalUnlock releases lock on hglobal after copying buffer into owned Vec.
-            let _ = GlobalUnlock(hglobal);
-
-            let rgba = match decode_dib_to_rgba(&dib_bytes) {
-                Ok(img) => img,
-                Err(e) => {
-                    tracing::debug!("Failed to decode DIB: {e}");
-                    return Ok(None);
-                }
-            };
-            let w = rgba.width() as i64;
-            let h = rgba.height() as i64;
-            let png_bytes = rgba_to_png(&rgba)?;
-
-            return Ok(Some(Capture {
-                kind: Kind::Image,
-                sub_kind: None,
-                primary: Some(png_bytes),
-                formats: Vec::new(),
-                files: Vec::new(),
-                preview_text: None,
-                ext: Some("PNG".into()),
-                mime: Some("image/png".into()),
-                width: Some(w),
-                height: Some(h),
-                duration_ms: None,
-                source_app: None,
-                is_reference: false,
-                ref_path: None,
-            }));
+    unsafe {
+        // Sound: Caller holds open clipboard lock; retrieves handle for DIB format owned by Windows.
+        let handle = match GetClipboardData(fmt) {
+            Ok(h) if !h.0.is_null() => h,
+            _ => return Ok(None),
+        };
+        let hglobal = HGLOBAL(handle.0);
+        // Sound: GlobalSize queries byte length of allocated global clipboard memory.
+        let total_size = GlobalSize(hglobal);
+        if total_size < 40 {
+            return Ok(None);
         }
-    }
+        // Sound: GlobalLock acquires pointer to global memory block valid until GlobalUnlock.
+        let ptr = GlobalLock(hglobal);
+        if ptr.is_null() {
+            return Ok(None);
+        }
+        // Sound: ptr is valid for total_size bytes while locked by GlobalLock.
+        let slice = std::slice::from_raw_parts(ptr as *const u8, total_size);
 
-    Ok(None)
+        // The header decides whether the payload is worth copying at all, so it
+        // is read before the copy rather than after. Reading a few fields costs
+        // nothing; copying a quarter-gigabyte that is then rejected would cost
+        // the whole machine its clipboard for the duration.
+        let Some(header) = read_dib_header(slice) else {
+            // Sound: GlobalUnlock releases the lock taken above before returning.
+            let _ = GlobalUnlock(hglobal);
+            return Ok(None);
+        };
+        if header.estimated_pixel_bytes > max_bytes || (total_size as u64) > max_bytes {
+            // Sound: GlobalUnlock releases the lock taken above before returning.
+            let _ = GlobalUnlock(hglobal);
+            return Err(AppError::TooLarge(
+                header.estimated_pixel_bytes.max(total_size as u64),
+            ));
+        }
+
+        let dib_bytes = slice.to_vec();
+        // Sound: GlobalUnlock releases lock on hglobal after copying buffer into owned Vec.
+        let _ = GlobalUnlock(hglobal);
+
+        Ok(Some(RawClipboard::Dib(dib_bytes)))
+    }
 }
 
-/// Decodes text formats (`HTML Format`, `Rich Text Format`, `CF_UNICODETEXT`).
-fn decode_text(max_bytes: u64) -> AppResult<Option<Capture>> {
-    let mut captured_formats = Vec::new();
+/// The few `BITMAPINFOHEADER` fields that decide whether a DIB is worth
+/// copying, and how big its pixels will be. `None` for anything malformed.
+struct DibHeader {
+    estimated_pixel_bytes: u64,
+}
 
+fn read_dib_header(slice: &[u8]) -> Option<DibHeader> {
+    if slice.len() < 40 {
+        return None;
+    }
+    let bi_width_raw = read_i32_le(&slice[4..8])?;
+    let bi_height_raw = read_i32_le(&slice[8..12])?;
+    let bi_bit_count = read_u16_le(&slice[14..16])? as u64;
+
+    let bi_width = bi_width_raw.checked_abs().filter(|w| *w > 0)? as u64;
+    let bi_height = bi_height_raw.checked_abs().filter(|h| *h > 0)? as u64;
+    if bi_bit_count == 0 || !matches!(bi_bit_count, 1 | 4 | 8 | 16 | 24 | 32) {
+        return None;
+    }
+
+    let bits_per_row = bi_width.checked_mul(bi_bit_count)?;
+    let row_stride = bits_per_row.checked_add(31).map(|b| (b / 32) * 4)?;
+    let estimated_pixel_bytes = row_stride.checked_mul(bi_height)?;
+    Some(DibHeader {
+        estimated_pixel_bytes,
+    })
+}
+
+/// Reads the PNG's dimensions and whether it moves. Both need the whole file
+/// parsed, which is why this waited for the clipboard to be closed.
+fn build_png_capture(png_bytes: Vec<u8>) -> Option<Capture> {
+    let img = image::load_from_memory(&png_bytes).ok()?;
+    let w = img.width() as i64;
+    let h = img.height() as i64;
+    let sub_kind = if classify::is_animated_image(&png_bytes) {
+        Some(SubKind::Animated)
+    } else {
+        None
+    };
+    Some(Capture {
+        kind: Kind::Image,
+        sub_kind,
+        primary: Some(png_bytes),
+        formats: Vec::new(),
+        files: Vec::new(),
+        preview_text: None,
+        ext: Some("PNG".into()),
+        mime: Some("image/png".into()),
+        width: Some(w),
+        height: Some(h),
+        duration_ms: None,
+        source_app: None,
+        is_reference: false,
+        ref_path: None,
+    })
+}
+
+/// Turns a DIB into the PNG the store keeps. A decode and an encode of the
+/// full image, and the single most expensive thing capture does — it used to
+/// run with the clipboard held open.
+fn build_dib_capture(dib_bytes: &[u8]) -> AppResult<Option<Capture>> {
+    let rgba = match decode_dib_to_rgba(dib_bytes) {
+        Ok(img) => img,
+        Err(e) => {
+            tracing::debug!("Failed to decode DIB: {e}");
+            return Ok(None);
+        }
+    };
+    let w = rgba.width() as i64;
+    let h = rgba.height() as i64;
+    let png_bytes = rgba_to_png(&rgba)?;
+
+    Ok(Some(Capture {
+        kind: Kind::Image,
+        sub_kind: None,
+        primary: Some(png_bytes),
+        formats: Vec::new(),
+        files: Vec::new(),
+        preview_text: None,
+        ext: Some("PNG".into()),
+        mime: Some("image/png".into()),
+        width: Some(w),
+        height: Some(h),
+        duration_ms: None,
+        source_app: None,
+        is_reference: false,
+        ref_path: None,
+    }))
+}
+
+/// Copies the text formats off the clipboard. These are small next to an
+/// image, but they are still copies and nothing more: the classification and
+/// the preview are built afterwards.
+fn grab_text(max_bytes: u64) -> Option<RawClipboard> {
     let has_html = is_format_available(*FORMAT_HTML);
     let has_rtf = is_format_available(*FORMAT_RTF);
     let has_unicode = is_format_available(CF_UNICODETEXT);
     let has_ansi = is_format_available(CF_TEXT);
 
     if !has_html && !has_rtf && !has_unicode && !has_ansi {
-        return Ok(None);
+        return None;
     }
 
+    let mut formats = Vec::new();
     if has_html {
         if let Some(bytes) = read_raw_clipboard_bytes(*FORMAT_HTML, max_bytes) {
-            captured_formats.push(CapturedFormat {
+            formats.push(CapturedFormat {
                 format: "HTML Format".into(),
                 bytes,
             });
         }
     }
-
     if has_rtf {
         if let Some(bytes) = read_raw_clipboard_bytes(*FORMAT_RTF, max_bytes) {
-            captured_formats.push(CapturedFormat {
+            formats.push(CapturedFormat {
                 format: "Rich Text Format".into(),
                 bytes,
             });
         }
     }
 
-    // Get plain text canonical representation
-    let plain_text = if has_unicode {
+    let plain = if has_unicode {
         read_clipboard_unicode_text(max_bytes)
     } else if has_ansi {
         read_clipboard_ansi_text(max_bytes)
@@ -430,29 +486,35 @@ fn decode_text(max_bytes: u64) -> AppResult<Option<Capture>> {
         None
     };
 
-    let text_content = match plain_text {
+    Some(RawClipboard::Text { formats, plain })
+}
+
+/// Classifies the text and assembles the capture, off the lock.
+fn build_text_capture(formats: Vec<CapturedFormat>, plain: Option<String>) -> Option<Capture> {
+    let text_content = match plain {
         Some(t) if !t.is_empty() => t,
         _ => {
-            // If no plain text format was present but HTML/RTF was, extract or return
-            if captured_formats.is_empty() {
-                return Ok(None);
+            // No plain text, but rich formats were present: the item is still
+            // worth keeping, under a name that says what it is.
+            if formats.is_empty() {
+                return None;
             }
             "Rich Text Item".to_string()
         }
     };
 
     let mut sub_kind = classify::classify_text(&text_content);
-    if !captured_formats.is_empty() && sub_kind == SubKind::Plain {
+    if !formats.is_empty() && sub_kind == SubKind::Plain {
         sub_kind = SubKind::Rich;
     }
 
     let primary = text_content.as_bytes().to_vec();
 
-    Ok(Some(Capture {
+    Some(Capture {
         kind: Kind::Text,
         sub_kind: Some(sub_kind),
         primary: Some(primary),
-        formats: captured_formats,
+        formats,
         files: Vec::new(),
         preview_text: Some(text_content),
         ext: Some("TXT".into()),
@@ -463,7 +525,7 @@ fn decode_text(max_bytes: u64) -> AppResult<Option<Capture>> {
         source_app: None,
         is_reference: false,
         ref_path: None,
-    }))
+    })
 }
 
 /// Reads raw bytes for a given clipboard format.

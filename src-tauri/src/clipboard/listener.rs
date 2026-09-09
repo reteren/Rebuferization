@@ -10,17 +10,84 @@ use std::thread;
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::{
-    AddClipboardFormatListener, GetClipboardSequenceNumber, RemoveClipboardFormatListener,
+    AddClipboardFormatListener, GetClipboardOwner, GetClipboardSequenceNumber,
+    RemoveClipboardFormatListener,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, TranslateMessage,
-    UnregisterClassW, CREATESTRUCTW, GWLP_USERDATA, HWND_MESSAGE, MSG, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_CLIPBOARDUPDATE, WM_CREATE, WM_DESTROY, WM_NCDESTROY, WNDCLASSEXW,
+    GetWindowLongPtrW, GetWindowThreadProcessId, PostQuitMessage, RegisterClassExW,
+    SendMessageTimeoutW, SetWindowLongPtrW, TranslateMessage, UnregisterClassW, CREATESTRUCTW,
+    GWLP_USERDATA, HWND_MESSAGE, MSG, SMTO_ABORTIFHUNG, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_CLIPBOARDUPDATE, WM_CREATE, WM_DESTROY, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
 };
 
 use crate::clipboard::decode;
+
+/// How long to wait after `WM_CLIPBOARDUPDATE` before looking at the clipboard
+/// at all. Short; the real waiting is done by `owner_is_writing`.
+const OPEN_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// How long to give the clipboard's owner to answer a ping before concluding it
+/// is still busy writing.
+const OWNER_PING_MS: u32 = 40;
+
+/// How long to wait between pings, and how many times to try, before giving up
+/// on a capture entirely. Roughly half a second in total: longer than any
+/// normal write takes, short enough that a genuinely stuck owner cannot defer
+/// captures for ever.
+const SETTLE_STEP: std::time::Duration = std::time::Duration::from_millis(60);
+const SETTLE_ATTEMPTS: u32 = 8;
+
+/// Whether the app that owns the clipboard is still in the middle of writing to
+/// it.
+///
+/// This is the difference between a clipboard manager and a broken machine.
+/// A write like WPF's `SetDataObject(data, copy: true)` — which is what a
+/// screenshot tool does — happens in two steps: the formats are published for
+/// *delayed* rendering, and then flushed so they are actually materialised.
+/// Between the two the clipboard is briefly free.
+///
+/// A reader that takes it in that gap then asks for a format nobody has
+/// rendered yet, and Windows answers by sending `WM_RENDERFORMAT` to the
+/// owner — which is inside its own write, waiting for the clipboard this reader
+/// is holding. Neither side can move. Measured here: 995 ms of held clipboard,
+/// and the writer's flush failing outright with `CLIPBRD_E_CANT_OPEN`, which is
+/// how this application broke a screenshot tool that had done nothing wrong.
+///
+/// An owner that is mid-write is not pumping messages, so a ping that goes
+/// unanswered is exactly the signal to stay out of the way. Measured: no answer
+/// within 40 ms while the write was in flight, an answer in 0.1 ms once it had
+/// finished.
+unsafe fn owner_is_writing() -> bool {
+    // Sound: GetClipboardOwner is a read-only query needing no open clipboard.
+    let owner = GetClipboardOwner().unwrap_or_default();
+    if owner.0.is_null() {
+        return false;
+    }
+    let mut pid = 0u32;
+    // Sound: owner is a live window handle; pid is a plain out-param.
+    GetWindowThreadProcessId(owner, Some(&mut pid));
+    // Our own writes are already filtered by the sequence number, and pinging
+    // ourselves from this thread would be answered by this thread.
+    if pid == GetCurrentProcessId() {
+        return false;
+    }
+    let mut result = 0usize;
+    // Sound: WM_NULL carries no data and is safe to send to any window; the
+    // timeout bounds the wait, and ABORTIFHUNG returns early for a dead one.
+    let answered = SendMessageTimeoutW(
+        owner,
+        WM_NULL,
+        WPARAM(0),
+        LPARAM(0),
+        SMTO_ABORTIFHUNG,
+        OWNER_PING_MS,
+        Some(&mut result),
+    );
+    answered.0 == 0
+}
 use crate::clipboard::privacy;
 use crate::clipboard::writer;
 use crate::clipboard::ClipboardWatcher;
@@ -214,7 +281,39 @@ unsafe extern "system" fn listener_wndproc(
             // 3. Detect foreground app BEFORE opening clipboard
             let source_app = privacy::get_foreground_process_name();
 
-            // 4. Open clipboard with retry (10 attempts, 20ms backoff)
+            // 4. Privacy filter before the clipboard is opened at all. It needs
+            //    only the foreground process and the settings, both already in
+            //    hand, and a blocked app must not cost every other process on
+            //    the machine an open/close cycle of the global lock.
+            let privacy_settings = ctx.load_privacy_settings();
+            if privacy::check_clipboard_privacy(source_app.as_deref(), &privacy_settings) {
+                return LRESULT(0);
+            }
+
+            // 5. Let the writer finish before reaching for the lock.
+            //
+            //    `WM_CLIPBOARDUPDATE` arrives while the app that caused it may
+            //    still be halfway through its write, and taking the clipboard
+            //    there is what deadlocks the two of us; see `owner_is_writing`.
+            //    Waiting costs a capture nothing — it is already asynchronous
+            //    from the user's point of view.
+            std::thread::sleep(OPEN_DELAY);
+            let mut settled = false;
+            for _ in 0..SETTLE_ATTEMPTS {
+                if !owner_is_writing() {
+                    settled = true;
+                    break;
+                }
+                std::thread::sleep(SETTLE_STEP);
+            }
+            if !settled {
+                // Better to lose one history entry than to hold the clipboard
+                // against an app that is still trying to use it.
+                tracing::debug!("clipboard owner still busy; skipping this capture");
+                return LRESULT(0);
+            }
+
+            // 6. Open clipboard with retry (10 attempts, 20ms backoff)
             let guard = match writer::ClipboardGuard::open_with_retry(Some(hwnd)) {
                 Ok(g) => g,
                 Err(_) => {
@@ -223,20 +322,25 @@ unsafe extern "system" fn listener_wndproc(
                 }
             };
 
-            // 5. Privacy filter BEFORE decoding
-            let privacy_settings = ctx.load_privacy_settings();
-            if privacy::check_clipboard_privacy(source_app.as_deref(), &privacy_settings) {
-                return LRESULT(0);
-            }
-
-            // 6. Decode clipboard content
+            // 7. Copy the contents out — and nothing more. Every millisecond
+            //    between here and the `drop` below is a millisecond in which no
+            //    other process on the machine can write to the clipboard at
+            //    all; see `decode::RawClipboard` for what that cost.
             let max_bytes = ctx.load_max_item_bytes();
-            let capture_opt = decode::decode_clipboard(max_bytes, source_app);
+            let raw = decode::grab_clipboard(max_bytes);
 
-            // 7. Explicitly release clipboard before inserting into store
+            // 8. Release the clipboard before doing any work with what was read.
             drop(guard);
 
-            // 8. Synchronously insert into Store and call on_item callback
+            // 9. Decode with the lock released: a PNG parsed for its
+            //    dimensions, a DIB turned into a PNG, a stat per dropped file.
+            let capture_opt = match raw {
+                Ok(Some(raw)) => decode::build_capture(raw, max_bytes, source_app),
+                Ok(None) => Ok(None),
+                Err(e) => Err(e),
+            };
+
+            // 10. Synchronously insert into Store and call on_item callback
             if let Ok(Some(capture)) = capture_opt {
                 match ctx.store.insert_capture(capture) {
                     Ok(item_dto) => {

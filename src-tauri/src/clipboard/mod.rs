@@ -71,8 +71,15 @@ pub type OnItem = Box<dyn Fn(crate::model::ItemDto) + Send + Sync + 'static>;
 /// Reads the clipboard right now and decodes it, without persisting. Used by
 /// the debug path and by tests.
 pub fn read_current(source_app: Option<String>) -> AppResult<Option<Capture>> {
-    let _guard = writer::ClipboardGuard::open_with_retry(None)?;
     let max_bytes = 256 * 1024 * 1024; // 256 MB default
-    let capture = decode::decode_clipboard(max_bytes, source_app)?;
-    Ok(capture)
+                                       // Copy under the lock, decode after it. Even off the hot path this must not
+                                       // hold the clipboard while it works; see `decode::RawClipboard`.
+    let raw = {
+        let _guard = writer::ClipboardGuard::open_with_retry(None)?;
+        decode::grab_clipboard(max_bytes)?
+    };
+    match raw {
+        Some(raw) => decode::build_capture(raw, max_bytes, source_app),
+        None => Ok(None),
+    }
 }
