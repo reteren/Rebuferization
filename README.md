@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/img/icon.png" width="140" alt="Rebuffer">
+  <img src="src-tauri/icons/128x128@2x.png" width="140" alt="Rebuffer">
 </p>
 
 <h1 align="center">Rebuffer</h1>
