@@ -1426,12 +1426,17 @@ function resetEverything(): void {
   }
 
   /* One scrollable row rather than a wrapping grid: the themes are a short
-     list to skim, and a row keeps the section from dominating the page. */
+     list to skim, and a row keeps the section from dominating the page.
+
+     Deliberately without `scrollbar-width`. Setting it opts the element out of
+     the `::-webkit-scrollbar` rules in global.css and back into the operating
+     system's own scrollbar, arrow buttons and all — which is why this one strip
+     had a grey Windows scrollbar under it while every other scrollable area in
+     the app followed the theme. */
   .theme-strip {
     display: flex;
     gap: 10px;
     overflow-x: auto;
     padding: 4px 2px 10px;
-    scrollbar-width: thin;
   }
 </style>

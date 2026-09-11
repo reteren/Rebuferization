@@ -60,15 +60,22 @@ textarea {
   background: transparent;
 }
 
+/* The thumb takes its colour from the theme's own hairline tokens rather than a
+   fixed white, which was invisible the moment a light theme put a white card
+   behind it. Every theme already tunes these to sit just above its background —
+   white-ish on the dark ones, near-black on Light, warm brown on Paper — so the
+   thumb follows the theme with nothing per-theme to maintain. The transparent
+   border and padding-box clip stay: they are what keep it a floating pill with
+   no track or divider drawn around it. */
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--border-3, rgba(255, 255, 255, 0.14));
   border-radius: var(--r-pill);
   border: 3px solid transparent;
   background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.24);
+  background: var(--text-3, rgba(255, 255, 255, 0.24));
   border: 3px solid transparent;
   background-clip: padding-box;
 }
